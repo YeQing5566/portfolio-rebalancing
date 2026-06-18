@@ -3,9 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -15,393 +13,436 @@ import (
 
 const configFile = "portfolio_config.json"
 
-type Config struct {
-	CurrentTotal string `json:"current_total"`
-	InvestAmount string `json:"invest_amount"`
-	MaxBuyCount  string `json:"max_buy_count"`
-	AssetsText   string `json:"assets_text"`
+var assetDefinitions = []AssetDefinition{
+	{Name: "标普500ETF", TargetPct: 33},
+	{Name: "纳指100ETF", TargetPct: 17},
+	{Name: "中证A500ETF", TargetPct: 33},
+	{Name: "红利低波ETF", TargetPct: 17},
 }
 
-type Asset struct {
-	Name          string
-	TargetPct     float64
-	CurrentPct    float64
-	PremiumPct    float64
-	PremiumLimit  float64
-	CurrentAmount float64
-	TargetAmount  float64
-	Gap           float64
-	BuyAmount     float64
-	AfterPct      float64
-	Status        string
-	Skipped       bool
+type Config struct {
+	CurrentTotal string             `json:"current_total"`
+	InvestAmount string             `json:"invest_amount"`
+	CurrentPcts  map[string]float64 `json:"current_pcts,omitempty"`
+	AssetsText   string             `json:"assets_text,omitempty"`
 }
 
 var (
-	currentTotalEdit *walk.LineEdit
-	investAmountEdit *walk.LineEdit
-	maxBuyCountEdit  *walk.LineEdit
-	assetsEdit       *walk.TextEdit
+	mainWindow       *walk.MainWindow
+	currentTotalEdit *walk.NumberEdit
+	investAmountEdit *walk.NumberEdit
+	currentPctEdits  = make([]*walk.NumberEdit, len(assetDefinitions))
 	resultEdit       *walk.TextEdit
+	statusBarItem    *walk.StatusBarItem
+	defaultTextColor = walk.RGB(35, 46, 66)
+	mutedTextColor   = walk.RGB(99, 115, 138)
+	accentColor      = walk.RGB(31, 111, 235)
+	windowBackground = SolidColorBrush{Color: walk.RGB(245, 247, 251)}
+	panelBackground  = SolidColorBrush{Color: walk.RGB(255, 255, 255)}
+	headerBackground = SolidColorBrush{Color: walk.RGB(30, 53, 87)}
+	resultBackground = SolidColorBrush{Color: walk.RGB(250, 252, 255)}
 )
 
 func main() {
-	defaultAssets := `标普500ETF,33,0,0,7
-纳指100ETF,17,0,0,10
-中证A500ETF,33,0,0,0
-红利低波ETF,17,0,0,0`
+	walk.AppendToWalkInit(func() {
+		walk.FocusEffect, _ = walk.NewBorderGlowEffect(accentColor)
+		walk.ValidationErrorEffect, _ = walk.NewBorderGlowEffect(walk.RGB(210, 55, 55))
+	})
 
-	exitCode, err := (MainWindow{
-		Title:   "投资再平衡计算器",
-		MinSize: Size{Width: 1100, Height: 720},
-		Layout:  VBox{},
-		Children: []Widget{
-			Composite{
-				Layout: Grid{Columns: 6},
-				Children: []Widget{
-					Label{Text: "当前投资总市值"},
-					LineEdit{AssignTo: &currentTotalEdit, Text: "0"},
-					Label{Text: "本次可投入金额"},
-					LineEdit{AssignTo: &investAmountEdit, Text: "5000"},
-					Label{Text: "最多买入资产数"},
-					LineEdit{AssignTo: &maxBuyCountEdit, Text: "2"},
-				},
-			},
-			Label{
-				Text: "资产格式：资产名称,目标仓位%,当前仓位%,QDII溢价%,溢价保护线%。普通资产后两项填0。新增资产直接新增一行。",
-			},
-			TextEdit{
-				AssignTo: &assetsEdit,
-				Text:     defaultAssets,
-			},
-			Composite{
-				Layout: HBox{},
-				Children: []Widget{
-					PushButton{
-						Text: "计算买入建议",
-						OnClicked: func() {
-							result, err := calculate()
-							if err != nil {
-								walk.MsgBox(nil, "错误", err.Error(), walk.MsgBoxIconError)
-								return
-							}
-							resultEdit.SetText(result)
-						},
-					},
-					PushButton{
-						Text: "保存配置",
-						OnClicked: func() {
-							if err := saveConfig(); err != nil {
-								walk.MsgBox(nil, "错误", err.Error(), walk.MsgBoxIconError)
-								return
-							}
-							walk.MsgBox(nil, "保存成功", "配置已保存到 "+configFile, walk.MsgBoxIconInformation)
-						},
-					},
-					PushButton{
-						Text: "读取配置",
-						OnClicked: func() {
-							if err := loadConfig(); err != nil {
-								walk.MsgBox(nil, "错误", err.Error(), walk.MsgBoxIconError)
-								return
-							}
-							walk.MsgBox(nil, "读取成功", "配置已读取", walk.MsgBoxIconInformation)
-						},
-					},
-				},
-			},
-			Label{Text: "计算结果"},
-			TextEdit{
-				AssignTo: &resultEdit,
-				ReadOnly: true,
+	window := MainWindow{
+		AssignTo:   &mainWindow,
+		Title:      "投资组合再平衡助手",
+		MinSize:    Size{Width: 980, Height: 760},
+		Size:       Size{Width: 1120, Height: 860},
+		Font:       Font{Family: "Microsoft YaHei UI", PointSize: 10},
+		Background: windowBackground,
+		Layout: VBox{
+			Margins: Margins{Left: 16, Top: 16, Right: 16, Bottom: 12},
+			Spacing: 12,
+		},
+		StatusBarItems: []StatusBarItem{
+			{
+				AssignTo: &statusBarItem,
+				Text:     "规则：只买低配 · 不做择时 · 半年检查仅作卖出提醒",
+				Width:    720,
 			},
 		},
-	}).Run()
-	if err != nil {
-		fmt.Println("窗口启动失败：", err)
-		fmt.Println("按回车退出...")
-		fmt.Scanln()
-		os.Exit(1)
+		Children: []Widget{
+			buildHeader(),
+			Composite{
+				Layout: HBox{
+					MarginsZero: true,
+					Spacing:     12,
+				},
+				Children: []Widget{
+					buildAmountPanel(),
+					buildPositionPanel(),
+				},
+			},
+			buildActionBar(),
+			GroupBox{
+				Title:         "计算结果",
+				StretchFactor: 1,
+				Background:    panelBackground,
+				Layout: VBox{
+					Margins: Margins{Left: 12, Top: 14, Right: 12, Bottom: 12},
+				},
+				Children: []Widget{
+					TextEdit{
+						AssignTo:      &resultEdit,
+						ReadOnly:      true,
+						VScroll:       true,
+						Background:    resultBackground,
+						TextColor:     defaultTextColor,
+						Font:          Font{Family: "Microsoft YaHei UI", PointSize: 10},
+						StretchFactor: 1,
+						Text:          initialResultText(),
+					},
+				},
+			},
+		},
 	}
 
-	_ = exitCode
+	if err := window.Create(); err != nil {
+		showStartupError(err)
+	}
+
+	_ = investAmountEdit.SetValue(5000)
+	mainWindow.Run()
 }
 
-func calculate() (string, error) {
-	currentTotal, err := parseFloat(currentTotalEdit.Text())
-	if err != nil {
-		return "", fmt.Errorf("当前投资总市值填写错误")
+func buildHeader() Widget {
+	return Composite{
+		MinSize:    Size{Height: 72},
+		Background: headerBackground,
+		Layout: HBox{
+			Margins: Margins{Left: 22, Top: 14, Right: 22, Bottom: 14},
+			Spacing: 16,
+		},
+		Children: []Widget{
+			Label{
+				Text:      "投资组合再平衡助手",
+				Font:      Font{Family: "Microsoft YaHei UI", PointSize: 16, Bold: true},
+				TextColor: walk.RGB(255, 255, 255),
+			},
+			Label{
+				Text:      "用新增资金优先补齐低配资产，让买入后的组合尽量靠近长期目标。",
+				TextColor: walk.RGB(213, 224, 240),
+			},
+			HSpacer{},
+		},
+	}
+}
+
+func buildAmountPanel() Widget {
+	return GroupBox{
+		Title:         "① 本次投入",
+		MinSize:       Size{Width: 330},
+		StretchFactor: 1,
+		Background:    panelBackground,
+		Layout: Grid{
+			Columns: 2,
+			Margins: Margins{Left: 14, Top: 18, Right: 14, Bottom: 14},
+			Spacing: 10,
+		},
+		Children: []Widget{
+			Label{
+				Text:      "当前已投资总资产",
+				TextColor: defaultTextColor,
+			},
+			NumberEdit{
+				AssignTo:           &currentTotalEdit,
+				Value:              0,
+				Decimals:           2,
+				Increment:          1000,
+				MinValue:           0,
+				MaxValue:           1_000_000_000,
+				SpinButtonsVisible: false,
+				Suffix:             " 元",
+				ToolTipText:        "当前四项资产合计市值，不含本次准备投入的金额。",
+			},
+			Label{
+				Text:      "本次可投入金额",
+				TextColor: defaultTextColor,
+			},
+			NumberEdit{
+				AssignTo:           &investAmountEdit,
+				Value:              5000,
+				Decimals:           2,
+				Increment:          500,
+				MinValue:           0,
+				MaxValue:           1_000_000_000,
+				SpinButtonsVisible: false,
+				Suffix:             " 元",
+				ToolTipText:        "本次计划全部用于再平衡的新增资金。",
+			},
+			Label{
+				ColumnSpan: 2,
+				Text:       "资金按相对低配程度分层补齐；没有触发卖出时，月度操作只使用新增资金。",
+				TextColor:  mutedTextColor,
+				Font:       Font{Family: "Microsoft YaHei UI", PointSize: 9},
+			},
+		},
+	}
+}
+
+func buildPositionPanel() Widget {
+	children := []Widget{
+		Label{
+			Text:      "资产",
+			Font:      Font{Family: "Microsoft YaHei UI", PointSize: 9, Bold: true},
+			TextColor: mutedTextColor,
+		},
+		Label{
+			Text:          "目标仓位",
+			Font:          Font{Family: "Microsoft YaHei UI", PointSize: 9, Bold: true},
+			TextColor:     mutedTextColor,
+			TextAlignment: AlignCenter,
+		},
+		Label{
+			Text:          "当前仓位",
+			Font:          Font{Family: "Microsoft YaHei UI", PointSize: 9, Bold: true},
+			TextColor:     mutedTextColor,
+			TextAlignment: AlignCenter,
+		},
 	}
 
-	investAmount, err := parseFloat(investAmountEdit.Text())
-	if err != nil {
-		return "", fmt.Errorf("本次可投入金额填写错误")
+	for i, definition := range assetDefinitions {
+		children = append(children,
+			Label{
+				Text:      definition.Name,
+				TextColor: defaultTextColor,
+			},
+			Label{
+				Text:          formatPercent(definition.TargetPct),
+				TextColor:     accentColor,
+				Font:          Font{Family: "Microsoft YaHei UI", PointSize: 10, Bold: true},
+				TextAlignment: AlignCenter,
+			},
+			NumberEdit{
+				AssignTo:           &currentPctEdits[i],
+				Value:              0,
+				Decimals:           2,
+				Increment:          0.5,
+				MinValue:           0,
+				MaxValue:           100,
+				SpinButtonsVisible: false,
+				Suffix:             " %",
+			},
+		)
 	}
 
-	maxBuyFloat, err := parseFloat(maxBuyCountEdit.Text())
-	if err != nil {
-		return "", fmt.Errorf("最多买入资产数填写错误")
+	return GroupBox{
+		Title:         "② 当前仓位",
+		MinSize:       Size{Width: 560},
+		StretchFactor: 2,
+		Background:    panelBackground,
+		Layout: Grid{
+			Columns: 3,
+			Margins: Margins{Left: 14, Top: 18, Right: 14, Bottom: 14},
+			Spacing: 8,
+		},
+		Children: children,
 	}
-	maxBuyCount := int(maxBuyFloat)
+}
 
-	if currentTotal < 0 || investAmount < 0 {
-		return "", fmt.Errorf("金额不能为负数")
+func buildActionBar() Widget {
+	return Composite{
+		Background: panelBackground,
+		Layout: HBox{
+			Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 10},
+			Spacing: 8,
+		},
+		Children: []Widget{
+			PushButton{
+				Text:    "计算买入建议",
+				MinSize: Size{Width: 150, Height: 34},
+				Font:    Font{Family: "Microsoft YaHei UI", PointSize: 10, Bold: true},
+				OnClicked: func() {
+					result, err := calculateFromForm()
+					if err != nil {
+						walk.MsgBox(mainWindow, "输入有误", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconWarning)
+						statusBarItem.SetText("请修正输入后重新计算")
+						return
+					}
+					resultEdit.SetText(result)
+					statusBarItem.SetText("计算完成：买入金额已按相对低配程度分层分配")
+				},
+			},
+			HSpacer{},
+			PushButton{
+				Text:    "保存配置",
+				MinSize: Size{Width: 110, Height: 32},
+				OnClicked: func() {
+					if err := saveConfig(); err != nil {
+						walk.MsgBox(mainWindow, "保存失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+						return
+					}
+					statusBarItem.SetText("配置已保存到 " + configFile)
+				},
+			},
+			PushButton{
+				Text:    "读取配置",
+				MinSize: Size{Width: 110, Height: 32},
+				OnClicked: func() {
+					if err := loadConfig(); err != nil {
+						walk.MsgBox(mainWindow, "读取失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+						return
+					}
+					statusBarItem.SetText("配置已读取；旧版配置会自动迁移到四资产表单")
+				},
+			},
+			PushButton{
+				Text:    "清空仓位",
+				MinSize: Size{Width: 110, Height: 32},
+				OnClicked: func() {
+					for _, edit := range currentPctEdits {
+						_ = edit.SetValue(0)
+					}
+					resultEdit.SetText(initialResultText())
+					statusBarItem.SetText("当前仓位已清空")
+				},
+			},
+		},
+	}
+}
+
+func calculateFromForm() (string, error) {
+	currentPcts := make([]float64, len(assetDefinitions))
+	for i, edit := range currentPctEdits {
+		currentPcts[i] = edit.Value()
 	}
 
-	assets, warning, err := parseAssets(assetsEdit.Text(), currentTotal)
+	result, err := CalculatePortfolio(
+		currentTotalEdit.Value(),
+		investAmountEdit.Value(),
+		assetDefinitions,
+		currentPcts,
+	)
 	if err != nil {
 		return "", err
 	}
 
-	var targetSum float64
-	var currentPctSum float64
-
-	for _, a := range assets {
-		targetSum += a.TargetPct
-		currentPctSum += a.CurrentPct
-	}
-
-	if math.Abs(targetSum-100) > 0.01 {
-		return "", fmt.Errorf("目标仓位合计必须为100%%，当前为 %.2f%%", targetSum)
-	}
-
-	if currentTotal > 0 && math.Abs(currentPctSum-100) > 0.5 {
-		return "", fmt.Errorf("当前仓位合计建议为100%%，当前为 %.2f%%", currentPctSum)
-	}
-
-	afterTotal := currentTotal + investAmount
-	if afterTotal <= 0 {
-		return "", fmt.Errorf("当前总市值和投入金额不能同时为0")
-	}
-
-	for _, a := range assets {
-		a.TargetAmount = afterTotal * a.TargetPct / 100
-		a.Gap = a.TargetAmount - a.CurrentAmount
-
-		lowLine := a.TargetPct * 0.75
-		highLine := a.TargetPct * 1.25
-
-		switch {
-		case a.CurrentPct > highLine:
-			a.Status = "高配，半年检查时提示"
-		case a.CurrentPct < lowLine:
-			a.Status = "明显低配，新增资金优先补"
-		case a.Gap > 0:
-			a.Status = "低配，可买入"
-		default:
-			a.Status = "达标或高配，本次不买"
-		}
-
-		if a.Gap > 0 && a.PremiumLimit > 0 && a.PremiumPct > a.PremiumLimit {
-			if a.CurrentPct >= lowLine {
-				a.Skipped = true
-				a.Status += "；QDII溢价超过保护线，本次跳过"
-			} else {
-				a.Status += "；QDII溢价高，但严重低配，可少量补"
-			}
-		}
-	}
-
-	candidates := make([]*Asset, 0)
-	for _, a := range assets {
-		if a.Gap > 0 && !a.Skipped {
-			candidates = append(candidates, a)
-		}
-	}
-
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Gap > candidates[j].Gap
-	})
-
-	if maxBuyCount > 0 && len(candidates) > maxBuyCount {
-		candidates = candidates[:maxBuyCount]
-	}
-
-	var selectedGapSum float64
-	for _, c := range candidates {
-		selectedGapSum += c.Gap
-	}
-
-	remainingCash := investAmount
-
-	if selectedGapSum > 0 && investAmount > 0 {
-		if investAmount >= selectedGapSum {
-			for _, c := range candidates {
-				c.BuyAmount = c.Gap
-				remainingCash -= c.BuyAmount
-			}
-		} else {
-			for _, c := range candidates {
-				c.BuyAmount = investAmount * c.Gap / selectedGapSum
-				remainingCash -= c.BuyAmount
-			}
-		}
-	}
-
-	for _, a := range assets {
-		a.AfterPct = (a.CurrentAmount + a.BuyAmount) / afterTotal * 100
-	}
-
-	var b strings.Builder
-
-	b.WriteString("========== 买入建议 ==========\r\n\r\n")
-
-	if warning != "" {
-		b.WriteString("【QDII溢价提示】\r\n")
-		b.WriteString(warning)
-		b.WriteString("\r\n")
-	}
-
-	b.WriteString(fmt.Sprintf("当前投资总市值：%.2f 元\r\n", currentTotal))
-	b.WriteString(fmt.Sprintf("本次可投入金额：%.2f 元\r\n", investAmount))
-	b.WriteString(fmt.Sprintf("买入后总市值：%.2f 元\r\n", afterTotal))
-	b.WriteString(fmt.Sprintf("最多买入资产数：%d，0表示不限\r\n", maxBuyCount))
-	b.WriteString(fmt.Sprintf("未分配现金：%.2f 元\r\n\r\n", math.Max(0, remainingCash)))
-
-	b.WriteString("【本次建议买入】\r\n")
-	hasBuy := false
-	for _, a := range assets {
-		if a.BuyAmount > 0.005 {
-			hasBuy = true
-			b.WriteString(fmt.Sprintf(
-				"- %s：买入 %.2f 元；当前 %.2f%% → 买后 %.2f%%\r\n",
-				a.Name, a.BuyAmount, a.CurrentPct, a.AfterPct,
-			))
-		}
-	}
-	if !hasBuy {
-		b.WriteString("- 本次没有符合规则的买入资产，资金可暂存现金或货币基金。\r\n")
-	}
-
-	b.WriteString("\r\n【全部资产状态】\r\n")
-	for _, a := range assets {
-		b.WriteString(fmt.Sprintf(
-			"- %s：目标 %.2f%%，当前 %.2f%%，买后 %.2f%%，缺口 %.2f 元，状态：%s\r\n",
-			a.Name, a.TargetPct, a.CurrentPct, a.AfterPct, a.Gap, a.Status,
-		))
-	}
-
-	b.WriteString("\r\n【半年检查参考】\r\n")
-	for _, a := range assets {
-		lowLine := a.TargetPct * 0.75
-		highLine := a.TargetPct * 1.25
-		b.WriteString(fmt.Sprintf(
-			"- %s：明显低配线 %.2f%%，高配提示线 %.2f%%\r\n",
-			a.Name, lowLine, highLine,
-		))
-	}
-
-	return b.String(), nil
-}
-
-func parseAssets(text string, currentTotal float64) ([]*Asset, string, error) {
-	lines := strings.Split(text, "\n")
-	assets := make([]*Asset, 0)
-	var warning strings.Builder
-
-	for i, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			continue
-		}
-
-		parts := strings.Split(line, ",")
-		if len(parts) != 5 {
-			return nil, "", fmt.Errorf("第 %d 行格式错误，应为：资产名称,目标仓位,当前仓位,溢价,溢价保护线", i+1)
-		}
-
-		name := strings.TrimSpace(parts[0])
-		targetPct, err := parseFloat(parts[1])
-		if err != nil {
-			return nil, "", fmt.Errorf("第 %d 行目标仓位错误", i+1)
-		}
-
-		currentPct, err := parseFloat(parts[2])
-		if err != nil {
-			return nil, "", fmt.Errorf("第 %d 行当前仓位错误", i+1)
-		}
-
-		premiumPct, err := parseFloat(parts[3])
-		if err != nil {
-			return nil, "", fmt.Errorf("第 %d 行QDII溢价错误", i+1)
-		}
-
-		premiumLimit, err := parseFloat(parts[4])
-		if err != nil {
-			return nil, "", fmt.Errorf("第 %d 行溢价保护线错误", i+1)
-		}
-
-		currentAmount := currentTotal * currentPct / 100
-
-		if premiumLimit > 0 && premiumPct > premiumLimit {
-			warning.WriteString(fmt.Sprintf(
-				"%s 当前溢价 %.2f%%，超过保护线 %.2f%%。\r\n",
-				name, premiumPct, premiumLimit,
-			))
-		}
-
-		assets = append(assets, &Asset{
-			Name:          name,
-			TargetPct:     targetPct,
-			CurrentPct:    currentPct,
-			PremiumPct:    premiumPct,
-			PremiumLimit:  premiumLimit,
-			CurrentAmount: currentAmount,
-		})
-	}
-
-	if len(assets) == 0 {
-		return nil, "", fmt.Errorf("至少需要填写一个资产")
-	}
-
-	return assets, warning.String(), nil
+	return FormatResult(result), nil
 }
 
 func saveConfig() error {
+	currentPcts := make(map[string]float64, len(assetDefinitions))
+	for i, definition := range assetDefinitions {
+		currentPcts[definition.Name] = currentPctEdits[i].Value()
+	}
+
 	cfg := Config{
-		CurrentTotal: currentTotalEdit.Text(),
-		InvestAmount: investAmountEdit.Text(),
-		MaxBuyCount:  maxBuyCountEdit.Text(),
-		AssetsText:   assetsEdit.Text(),
+		CurrentTotal: formatNumber(currentTotalEdit.Value()),
+		InvestAmount: formatNumber(investAmountEdit.Value()),
+		CurrentPcts:  currentPcts,
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("生成配置失败：%w", err)
 	}
 
-	return os.WriteFile(configFile, data, 0644)
+	if err := os.WriteFile(configFile, data, 0644); err != nil {
+		return fmt.Errorf("写入配置失败：%w", err)
+	}
+	return nil
 }
 
 func loadConfig() error {
 	data, err := os.ReadFile(configFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("读取 %s 失败：%w", configFile, err)
 	}
 
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return err
+		return fmt.Errorf("配置文件格式错误：%w", err)
 	}
 
-	currentTotalEdit.SetText(cfg.CurrentTotal)
-	investAmountEdit.SetText(cfg.InvestAmount)
-	maxBuyCountEdit.SetText(cfg.MaxBuyCount)
-	assetsEdit.SetText(cfg.AssetsText)
+	currentTotal, err := parseNumber(cfg.CurrentTotal)
+	if err != nil {
+		return fmt.Errorf("配置中的当前总资产无效")
+	}
+	investAmount, err := parseNumber(cfg.InvestAmount)
+	if err != nil {
+		return fmt.Errorf("配置中的可投入金额无效")
+	}
 
+	currentPcts := cfg.CurrentPcts
+	if len(currentPcts) == 0 && strings.TrimSpace(cfg.AssetsText) != "" {
+		currentPcts, err = parseLegacyCurrentPcts(cfg.AssetsText)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := currentTotalEdit.SetValue(currentTotal); err != nil {
+		return fmt.Errorf("配置中的当前总资产超出允许范围")
+	}
+	if err := investAmountEdit.SetValue(investAmount); err != nil {
+		return fmt.Errorf("配置中的可投入金额超出允许范围")
+	}
+
+	for i, definition := range assetDefinitions {
+		value := currentPcts[definition.Name]
+		if err := currentPctEdits[i].SetValue(value); err != nil {
+			return fmt.Errorf("%s 的当前仓位超出 0%%—100%%", definition.Name)
+		}
+	}
+
+	resultEdit.SetText(initialResultText())
 	return nil
 }
 
-func parseFloat(s string) (float64, error) {
-	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, ",", "")
-	s = strings.ReplaceAll(s, "，", "")
-	s = strings.ReplaceAll(s, "%", "")
-	s = strings.ReplaceAll(s, "％", "")
+func parseLegacyCurrentPcts(text string) (map[string]float64, error) {
+	values := make(map[string]float64)
+	for lineIndex, rawLine := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
 
-	if s == "" {
+		parts := strings.Split(line, ",")
+		if len(parts) < 3 {
+			return nil, fmt.Errorf("旧版配置第 %d 行格式错误", lineIndex+1)
+		}
+
+		name := strings.TrimSpace(parts[0])
+		currentPct, err := parseNumber(parts[2])
+		if err != nil {
+			return nil, fmt.Errorf("旧版配置第 %d 行当前仓位无效", lineIndex+1)
+		}
+		values[name] = currentPct
+	}
+	return values, nil
+}
+
+func parseNumber(value string) (float64, error) {
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, ",", "")
+	value = strings.ReplaceAll(value, "，", "")
+	value = strings.ReplaceAll(value, "%", "")
+	value = strings.ReplaceAll(value, "％", "")
+	if value == "" {
 		return 0, nil
 	}
+	return strconv.ParseFloat(value, 64)
+}
 
-	return strconv.ParseFloat(s, 64)
+func formatNumber(value float64) string {
+	return strconv.FormatFloat(value, 'f', 2, 64)
+}
+
+func initialResultText() string {
+	return "填写当前总资产、本次投入金额和四项当前仓位，然后点击“计算买入建议”。\r\n\r\n" +
+		"程序会：\r\n" +
+		"• 仅向买入后仍低配的资产分配新增资金；\r\n" +
+		"• 优先补相对目标偏离最大的资产；\r\n" +
+		"• 列出半年检查的高配卖出提醒线和明显低配参考线。"
+}
+
+func showStartupError(err error) {
+	walk.MsgBox(nil, "启动失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+	os.Exit(1)
 }
