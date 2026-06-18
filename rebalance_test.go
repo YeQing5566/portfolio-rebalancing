@@ -5,151 +5,169 @@ import (
 	"testing"
 )
 
-func TestCalculatePortfolioAtTargetBuysByTargetWeights(t *testing.T) {
-	result, err := CalculatePortfolio(
-		100000,
-		10000,
-		assetDefinitions,
-		[]float64{33, 17, 33, 17},
-	)
+func TestCalculatePortfolioSupportsArbitraryAssetCount(t *testing.T) {
+	inputs := []AssetInput{
+		{Name: "资产A", TargetPct: 10, CurrentAmount: 10000},
+		{Name: "资产B", TargetPct: 15, CurrentAmount: 15000},
+		{Name: "资产C", TargetPct: 20, CurrentAmount: 20000},
+		{Name: "资产D", TargetPct: 25, CurrentAmount: 25000},
+		{Name: "资产E", TargetPct: 30, CurrentAmount: 30000},
+	}
+
+	result, err := CalculatePortfolio(10000, inputs)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	want := []float64{3300, 1700, 3300, 1700}
+	want := []float64{1000, 1500, 2000, 2500, 3000}
 	for i, asset := range result.Assets {
 		assertClose(t, asset.BuyAmount, want[i], 0.01)
 		assertClose(t, asset.AfterPct, asset.TargetPct, 0.0001)
 	}
-	assertClose(t, result.AllocatedCash, 10000, 0.01)
-	assertClose(t, result.RemainingCash, 0, 0.01)
-}
-
-func TestCalculatePortfolioPrioritizesLargestRelativeUnderweight(t *testing.T) {
-	result, err := CalculatePortfolio(
-		100000,
-		10000,
-		assetDefinitions,
-		[]float64{40, 10, 33, 17},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if result.Assets[0].BuyAmount != 0 {
-		t.Fatalf("overweight asset should not be bought, got %.2f", result.Assets[0].BuyAmount)
-	}
-	if result.Assets[1].BuyAmount <= result.Assets[2].BuyAmount ||
-		result.Assets[1].BuyAmount <= result.Assets[3].BuyAmount {
-		t.Fatalf("largest relative underweight should receive the most cash: %#v", result.Assets)
-	}
-
-	ratios := []float64{
-		fulfillmentRatio(result.Assets[1]),
-		fulfillmentRatio(result.Assets[2]),
-		fulfillmentRatio(result.Assets[3]),
-	}
-	for i := 1; i < len(ratios); i++ {
-		assertClose(t, ratios[i], ratios[0], 0.00001)
-	}
+	assertClose(t, result.CurrentTotal, 100000, 0.01)
 	assertClose(t, result.AllocatedCash, 10000, 0.01)
 }
 
-func TestCalculatePortfolioNeverBuysCurrentlyOverTargetAsset(t *testing.T) {
-	result, err := CalculatePortfolio(
-		100000,
-		200000,
-		assetDefinitions,
-		[]float64{40, 10, 33, 17},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if result.Assets[0].BuyAmount != 0 {
-		t.Fatalf("currently over-target asset must not be bought, got %.2f", result.Assets[0].BuyAmount)
-	}
-	if result.RemainingCash <= 0 {
-		t.Fatal("cash should remain unallocated rather than buying an over-target asset")
+func TestCalculatePortfolioRequiresAtLeastTwoAssets(t *testing.T) {
+	_, err := CalculatePortfolio(1000, []AssetInput{
+		{Name: "唯一资产", TargetPct: 100, CurrentAmount: 10000},
+	})
+	if err == nil {
+		t.Fatal("expected at least two assets validation error")
 	}
 }
 
-func TestCalculatePortfolioFromZeroUsesTargets(t *testing.T) {
-	result, err := CalculatePortfolio(
-		0,
-		5000,
-		assetDefinitions,
-		[]float64{0, 0, 0, 0},
-	)
+func TestCurrentPercentagesComeFromCurrentAmounts(t *testing.T) {
+	result, err := CalculatePortfolio(0, []AssetInput{
+		{Name: "资产A", TargetPct: 60, CurrentAmount: 30000},
+		{Name: "资产B", TargetPct: 40, CurrentAmount: 20000},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	want := []float64{1650, 850, 1650, 850}
+	assertClose(t, result.CurrentTotal, 50000, 0.01)
+	assertClose(t, result.Assets[0].CurrentPct, 60, 0.0001)
+	assertClose(t, result.Assets[1].CurrentPct, 40, 0.0001)
+}
+
+func TestPreBuyOverTargetAssetCanStillReceiveCashForFinalTarget(t *testing.T) {
+	inputs := []AssetInput{
+		{Name: "资产A", TargetPct: 40, CurrentAmount: 50000},
+		{Name: "资产B", TargetPct: 30, CurrentAmount: 30000},
+		{Name: "资产C", TargetPct: 30, CurrentAmount: 20000},
+	}
+
+	result, err := CalculatePortfolio(50000, inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Asset A starts at 50%, above its 40% target. After adding 50,000,
+	// however, its final target amount is 60,000, so it must buy 10,000.
+	want := []float64{10000, 15000, 25000}
 	for i, asset := range result.Assets {
 		assertClose(t, asset.BuyAmount, want[i], 0.01)
+		assertClose(t, asset.AfterPct, asset.TargetPct, 0.0001)
 	}
 }
 
-func TestHalfYearThresholdsAreStrict(t *testing.T) {
-	result, err := CalculatePortfolio(
-		100000,
-		0,
-		assetDefinitions,
-		[]float64{41.25, 21.25, 24.75, 12.75},
-	)
+func TestAssetAtTargetBeforeBuyStillReceivesCash(t *testing.T) {
+	result, err := CalculatePortfolio(20000, []AssetInput{
+		{Name: "资产A", TargetPct: 50, CurrentAmount: 50000},
+		{Name: "资产B", TargetPct: 50, CurrentAmount: 50000},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, asset := range result.Assets {
-		if asset.ShouldSellReview {
-			t.Fatalf("%s should not trigger at the exact high line", asset.Name)
-		}
-		if asset.IsClearlyLow {
-			t.Fatalf("%s should not be clearly low at the exact low line", asset.Name)
-		}
-	}
+	assertClose(t, result.Assets[0].BuyAmount, 10000, 0.01)
+	assertClose(t, result.Assets[1].BuyAmount, 10000, 0.01)
+	assertClose(t, result.Assets[0].AfterPct, 50, 0.0001)
+	assertClose(t, result.Assets[1].AfterPct, 50, 0.0001)
+}
 
-	result, err = CalculatePortfolio(
-		100000,
-		0,
-		assetDefinitions,
-		[]float64{41.26, 21.26, 24.74, 12.74},
-	)
+func TestAllocationUsesFinalTargetWhenSomeAssetRemainsOverweight(t *testing.T) {
+	result, err := CalculatePortfolio(20000, []AssetInput{
+		{Name: "资产A", TargetPct: 40, CurrentAmount: 80000},
+		{Name: "资产B", TargetPct: 30, CurrentAmount: 10000},
+		{Name: "资产C", TargetPct: 30, CurrentAmount: 10000},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Assets[0].ShouldSellReview || !result.Assets[1].ShouldSellReview {
-		t.Fatal("values above the high lines should trigger a review")
+
+	if result.Assets[0].BuyAmount != 0 {
+		t.Fatalf("asset already above its final target amount should not be bought, got %.2f", result.Assets[0].BuyAmount)
 	}
-	if !result.Assets[2].IsClearlyLow || !result.Assets[3].IsClearlyLow {
-		t.Fatal("values below the low lines should be clearly underweight")
+	assertClose(t, result.Assets[1].BuyAmount, 10000, 0.01)
+	assertClose(t, result.Assets[2].BuyAmount, 10000, 0.01)
+	if !result.Assets[0].IsSeverelyHigh {
+		t.Fatal("asset A should be severely overweight after the proposed buys")
+	}
+	if !result.Assets[1].IsSeverelyLow || !result.Assets[2].IsSeverelyLow {
+		t.Fatal("assets B and C should remain severely underweight")
 	}
 }
 
-func TestCalculatePortfolioRejectsInvalidCurrentSum(t *testing.T) {
-	_, err := CalculatePortfolio(
-		100000,
-		5000,
-		assetDefinitions,
-		[]float64{30, 17, 33, 17},
-	)
+func TestSevereThresholdsUseAfterBuyPercentagesAndAreStrict(t *testing.T) {
+	exact, err := CalculatePortfolio(0, []AssetInput{
+		{Name: "资产A", TargetPct: 33, CurrentAmount: 41250},
+		{Name: "资产B", TargetPct: 17, CurrentAmount: 21250},
+		{Name: "资产C", TargetPct: 33, CurrentAmount: 24750},
+		{Name: "资产D", TargetPct: 17, CurrentAmount: 12750},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, asset := range exact.Assets {
+		if asset.IsSeverelyHigh || asset.IsSeverelyLow {
+			t.Fatalf("%s should not trigger at an exact threshold", asset.Name)
+		}
+	}
+
+	beyond, err := CalculatePortfolio(0, []AssetInput{
+		{Name: "资产A", TargetPct: 33, CurrentAmount: 41260},
+		{Name: "资产B", TargetPct: 17, CurrentAmount: 21260},
+		{Name: "资产C", TargetPct: 33, CurrentAmount: 24740},
+		{Name: "资产D", TargetPct: 17, CurrentAmount: 12740},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !beyond.Assets[0].IsSeverelyHigh || !beyond.Assets[1].IsSeverelyHigh {
+		t.Fatal("values above high thresholds should trigger reminders")
+	}
+	if !beyond.Assets[2].IsSeverelyLow || !beyond.Assets[3].IsSeverelyLow {
+		t.Fatal("values below low thresholds should trigger reminders")
+	}
+}
+
+func TestCalculatePortfolioRejectsInvalidTargetSum(t *testing.T) {
+	_, err := CalculatePortfolio(5000, []AssetInput{
+		{Name: "资产A", TargetPct: 60, CurrentAmount: 60000},
+		{Name: "资产B", TargetPct: 30, CurrentAmount: 40000},
+	})
 	if err == nil {
-		t.Fatal("expected current allocation sum validation error")
+		t.Fatal("expected target allocation sum validation error")
 	}
 }
 
-func TestParseLegacyCurrentPctsReadsFirstThreeColumns(t *testing.T) {
-	values, err := parseLegacyCurrentPcts(
-		"标普500ETF,33,31,99,88\n" +
-			"纳指100ETF,17,19,77,66\n",
+func TestParseLegacyAssetsTextConvertsPercentagesToAmounts(t *testing.T) {
+	items, err := parseLegacyAssetsText(
+		"资产A,60,30,99,88\n"+
+			"资产B,40,70,77,66\n",
+		100000,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertClose(t, values["标普500ETF"], 31, 0)
-	assertClose(t, values["纳指100ETF"], 19, 0)
+
+	assertClose(t, items[0].TargetPct, 60, 0)
+	assertClose(t, items[0].CurrentAmount, 30000, 0.01)
+	assertClose(t, items[1].TargetPct, 40, 0)
+	assertClose(t, items[1].CurrentAmount, 70000, 0.01)
 }
 
 func assertClose(t *testing.T, got, want, tolerance float64) {

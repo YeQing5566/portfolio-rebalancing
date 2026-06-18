@@ -1,6 +1,11 @@
 {
-  "current_total": "0",
-  "invest_amount": "5000",
-  "max_buy_count": "2",
-  "assets_text": "标普500ETF,33,0,0,7\n纳指100ETF,17,0,0,10\n中证A500ETF,33,0,0,0\n红利低波ETF,17,0,0,0"
+  "version": 2,
+  "invest_amount": "5000.00",
+  "assets": [
+    {
+      "name": "1",
+      "target_pct": 20,
+      "current_amount": 0
+    }
+  ]
 }

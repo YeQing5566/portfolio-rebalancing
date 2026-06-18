@@ -13,27 +13,27 @@ const (
 	moneyEpsilon        = 0.000001
 )
 
-type AssetDefinition struct {
-	Name      string
-	TargetPct float64
+type AssetInput struct {
+	Name          string  `json:"name"`
+	TargetPct     float64 `json:"target_pct"`
+	CurrentAmount float64 `json:"current_amount"`
 }
 
 type AssetResult struct {
-	Name             string
-	TargetPct        float64
-	CurrentPct       float64
-	CurrentAmount    float64
-	TargetAmount     float64
-	Gap              float64
-	BuyAmount        float64
-	AfterPct         float64
-	LowLine          float64
-	HighLine         float64
-	IsClearlyLow     bool
-	IsOverTarget     bool
-	CanBuy           bool
-	ShouldSellReview bool
-	Status           string
+	Name           string
+	TargetPct      float64
+	CurrentPct     float64
+	CurrentAmount  float64
+	TargetAmount   float64
+	Gap            float64
+	BuyAmount      float64
+	AfterPct       float64
+	LowLine        float64
+	HighLine       float64
+	CanBuy         bool
+	IsSeverelyLow  bool
+	IsSeverelyHigh bool
+	Status         string
 }
 
 type PortfolioResult struct {
@@ -45,111 +45,115 @@ type PortfolioResult struct {
 	Assets        []*AssetResult
 }
 
-// CalculatePortfolio calculates a buy-only rebalance. New cash first raises the
-// assets with the lowest current-to-target fulfillment ratio, then lets the
-// next-lowest assets join as their ratios become equal.
-func CalculatePortfolio(
-	currentTotal float64,
-	investAmount float64,
-	definitions []AssetDefinition,
-	currentPcts []float64,
-) (*PortfolioResult, error) {
-	if currentTotal < 0 || investAmount < 0 {
-		return nil, fmt.Errorf("金额不能为负数")
+// CalculatePortfolio performs a buy-only rebalance against the portfolio total
+// after the new cash is added. An asset's pre-buy percentage never excludes it
+// from buying: it can receive cash whenever its current amount is below its
+// target amount in the final portfolio.
+func CalculatePortfolio(investAmount float64, inputs []AssetInput) (*PortfolioResult, error) {
+	if investAmount < 0 {
+		return nil, fmt.Errorf("本次可投入金额不能为负数")
 	}
-	if len(definitions) == 0 || len(definitions) != len(currentPcts) {
-		return nil, fmt.Errorf("资产定义与当前仓位数量不一致")
+	if len(inputs) < 2 {
+		return nil, fmt.Errorf("至少需要添加两项资产")
 	}
 
+	var currentTotal float64
 	var targetSum float64
-	var currentPctSum float64
-	for i, definition := range definitions {
-		if strings.TrimSpace(definition.Name) == "" {
+	seenNames := make(map[string]struct{}, len(inputs))
+
+	for i, input := range inputs {
+		name := strings.TrimSpace(input.Name)
+		if name == "" {
 			return nil, fmt.Errorf("第 %d 项资产名称不能为空", i+1)
 		}
-		if definition.TargetPct <= 0 || definition.TargetPct > 100 {
-			return nil, fmt.Errorf("%s 的目标仓位必须在 0%%—100%% 之间", definition.Name)
+		key := strings.ToLower(name)
+		if _, exists := seenNames[key]; exists {
+			return nil, fmt.Errorf("资产名称不能重复：%s", name)
 		}
-		if currentPcts[i] < 0 || currentPcts[i] > 100 {
-			return nil, fmt.Errorf("%s 的当前仓位必须在 0%%—100%% 之间", definition.Name)
+		seenNames[key] = struct{}{}
+
+		if input.TargetPct <= 0 || input.TargetPct > 100 {
+			return nil, fmt.Errorf("%s 的目标仓位必须大于 0%% 且不超过 100%%", name)
 		}
-		targetSum += definition.TargetPct
-		currentPctSum += currentPcts[i]
+		if input.CurrentAmount < 0 {
+			return nil, fmt.Errorf("%s 的当前持有金额不能为负数", name)
+		}
+
+		targetSum += input.TargetPct
+		currentTotal += input.CurrentAmount
 	}
 
 	if math.Abs(targetSum-100) > 0.01 {
 		return nil, fmt.Errorf("目标仓位合计必须为 100%%，当前为 %.2f%%", targetSum)
 	}
-	if currentTotal > 0 && math.Abs(currentPctSum-100) > 0.1 {
-		return nil, fmt.Errorf("当前仓位合计必须为 100%%，当前为 %.2f%%", currentPctSum)
-	}
-	if currentTotal == 0 && currentPctSum > 0.01 {
-		return nil, fmt.Errorf("当前总资产为 0 时，各项当前仓位也应为 0")
-	}
 
 	afterTotal := currentTotal + investAmount
 	if afterTotal <= 0 {
-		return nil, fmt.Errorf("当前总资产和本次投入金额不能同时为 0")
+		return nil, fmt.Errorf("当前资产总额和本次可投入金额不能同时为 0")
 	}
 
 	result := &PortfolioResult{
 		CurrentTotal: currentTotal,
 		InvestAmount: investAmount,
 		AfterTotal:   afterTotal,
-		Assets:       make([]*AssetResult, 0, len(definitions)),
+		Assets:       make([]*AssetResult, 0, len(inputs)),
 	}
 
-	for i, definition := range definitions {
-		currentPct := currentPcts[i]
-		currentAmount := currentTotal * currentPct / 100
-		targetAmount := afterTotal * definition.TargetPct / 100
-		gap := targetAmount - currentAmount
-		lowLine := definition.TargetPct * lowAllocationRatio
-		highLine := definition.TargetPct * highAllocationRatio
-
-		asset := &AssetResult{
-			Name:             definition.Name,
-			TargetPct:        definition.TargetPct,
-			CurrentPct:       currentPct,
-			CurrentAmount:    currentAmount,
-			TargetAmount:     targetAmount,
-			Gap:              gap,
-			LowLine:          lowLine,
-			HighLine:         highLine,
-			IsClearlyLow:     currentPct < lowLine,
-			IsOverTarget:     currentPct > definition.TargetPct,
-			ShouldSellReview: currentPct > highLine,
-		}
-		asset.CanBuy = !asset.IsOverTarget && gap > moneyEpsilon
-
-		switch {
-		case asset.ShouldSellReview:
-			asset.Status = "超过半年卖出提醒线"
-		case asset.IsOverTarget:
-			asset.Status = "当前高于目标，本次不买"
-		case asset.IsClearlyLow:
-			asset.Status = "明显低配，优先补齐"
-		case gap > moneyEpsilon:
-			asset.Status = "买入后目标金额仍有缺口"
-		default:
-			asset.Status = "无需买入"
+	for _, input := range inputs {
+		currentPct := 0.0
+		if currentTotal > moneyEpsilon {
+			currentPct = input.CurrentAmount / currentTotal * 100
 		}
 
-		result.Assets = append(result.Assets, asset)
+		targetAmount := afterTotal * input.TargetPct / 100
+		gap := targetAmount - input.CurrentAmount
+
+		result.Assets = append(result.Assets, &AssetResult{
+			Name:          strings.TrimSpace(input.Name),
+			TargetPct:     input.TargetPct,
+			CurrentPct:    currentPct,
+			CurrentAmount: input.CurrentAmount,
+			TargetAmount:  targetAmount,
+			Gap:           gap,
+			LowLine:       input.TargetPct * lowAllocationRatio,
+			HighLine:      input.TargetPct * highAllocationRatio,
+			CanBuy:        gap > moneyEpsilon,
+		})
 	}
 
 	allocateCash(result.Assets, investAmount)
 
 	for _, asset := range result.Assets {
 		asset.AfterPct = (asset.CurrentAmount + asset.BuyAmount) / afterTotal * 100
+		asset.IsSeverelyLow = asset.AfterPct < asset.LowLine
+		asset.IsSeverelyHigh = asset.AfterPct > asset.HighLine
+		asset.Status = allocationStatus(asset)
 		result.AllocatedCash += asset.BuyAmount
 	}
+
 	result.AllocatedCash = roundMoney(result.AllocatedCash)
 	result.RemainingCash = roundMoney(math.Max(0, investAmount-result.AllocatedCash))
-
 	return result, nil
 }
 
+func allocationStatus(asset *AssetResult) string {
+	switch {
+	case asset.IsSeverelyHigh:
+		return "严重超配提醒"
+	case asset.IsSeverelyLow:
+		return "严重低配提醒"
+	case asset.AfterPct > asset.TargetPct+0.005:
+		return "略高于目标"
+	case asset.AfterPct < asset.TargetPct-0.005:
+		return "略低于目标"
+	default:
+		return "接近目标"
+	}
+}
+
+// allocateCash equalizes the final target-fulfillment ratio of every asset that
+// is below its target amount in the after-investment portfolio. Assets already
+// above their final target amount receive no cash.
 func allocateCash(assets []*AssetResult, availableCash float64) {
 	if availableCash <= moneyEpsilon {
 		return
@@ -202,9 +206,8 @@ func applyCentRounding(
 	budget float64,
 ) {
 	type roundingCandidate struct {
-		asset     *AssetResult
-		fraction  float64
-		remaining float64
+		asset    *AssetResult
+		fraction float64
 	}
 
 	rounding := make([]roundingCandidate, 0, len(candidates))
@@ -217,9 +220,8 @@ func applyCentRounding(
 		asset.BuyAmount = float64(cents) / 100
 		assignedCents += cents
 		rounding = append(rounding, roundingCandidate{
-			asset:     asset,
-			fraction:  raw*100 - float64(cents),
-			remaining: asset.Gap - asset.BuyAmount,
+			asset:    asset,
+			fraction: raw*100 - float64(cents),
 		})
 	}
 
@@ -262,13 +264,13 @@ func fulfillmentRatio(asset *AssetResult) float64 {
 
 func FormatResult(result *PortfolioResult) string {
 	var b strings.Builder
-	b.WriteString("月度买入方案\r\n")
+	b.WriteString("再平衡买入方案\r\n")
 	b.WriteString("────────────────────────────────────────\r\n")
-	b.WriteString(fmt.Sprintf("当前总资产：%s 元\r\n", formatMoney(result.CurrentTotal)))
-	b.WriteString(fmt.Sprintf("本次投入：  %s 元\r\n", formatMoney(result.InvestAmount)))
-	b.WriteString(fmt.Sprintf("买入后合计：%s 元\r\n", formatMoney(result.AfterTotal)))
+	b.WriteString(fmt.Sprintf("当前资产总额：%s 元\r\n", formatMoney(result.CurrentTotal)))
+	b.WriteString(fmt.Sprintf("本次可投入：  %s 元\r\n", formatMoney(result.InvestAmount)))
+	b.WriteString(fmt.Sprintf("买入后总额：  %s 元\r\n", formatMoney(result.AfterTotal)))
 	if result.RemainingCash > 0.005 {
-		b.WriteString(fmt.Sprintf("未分配现金：%s 元\r\n", formatMoney(result.RemainingCash)))
+		b.WriteString(fmt.Sprintf("未分配现金：  %s 元\r\n", formatMoney(result.RemainingCash)))
 	}
 
 	b.WriteString("\r\n【建议买入】\r\n")
@@ -279,7 +281,7 @@ func FormatResult(result *PortfolioResult) string {
 		}
 		hasBuy = true
 		b.WriteString(fmt.Sprintf(
-			"• %-12s  %12s 元    %.2f%% → %.2f%%（目标 %.2f%%）\r\n",
+			"• %-16s %12s 元｜当前 %.2f%% → 买入后 %.2f%%｜目标 %.2f%%\r\n",
 			asset.Name,
 			formatMoney(asset.BuyAmount),
 			asset.CurrentPct,
@@ -288,14 +290,15 @@ func FormatResult(result *PortfolioResult) string {
 		))
 	}
 	if !hasBuy {
-		b.WriteString("• 本次没有可买入的低配资产；新增资金保持为现金。\r\n")
+		b.WriteString("• 没有需要买入的资产，本次资金保持为现金。\r\n")
 	}
 
-	b.WriteString("\r\n【买入后仓位】\r\n")
+	b.WriteString("\r\n【全部资产】\r\n")
 	for _, asset := range result.Assets {
 		b.WriteString(fmt.Sprintf(
-			"• %-12s  目标 %.2f%%｜当前 %.2f%%｜买后 %.2f%%｜%s\r\n",
+			"• %-16s 当前金额 %12s 元｜目标 %.2f%%｜当前 %.2f%%｜买入后 %.2f%%｜%s\r\n",
 			asset.Name,
+			formatMoney(asset.CurrentAmount),
 			asset.TargetPct,
 			asset.CurrentPct,
 			asset.AfterPct,
@@ -303,35 +306,53 @@ func FormatResult(result *PortfolioResult) string {
 		))
 	}
 
-	b.WriteString("\r\n【半年检查：卖出提醒】\r\n")
-	hasSellReview := false
+	b.WriteString("\r\n【严重偏离提醒（按预计买入后仓位判断）】\r\n")
+	hasHigh, hasLow := false, false
 	for _, asset := range result.Assets {
-		if !asset.ShouldSellReview {
-			continue
+		switch {
+		case asset.IsSeverelyHigh:
+			hasHigh = true
+			b.WriteString(fmt.Sprintf(
+				"• %s 买入后预计 %.2f%%，高于严重超配线 %.2f%%。\r\n",
+				asset.Name,
+				asset.AfterPct,
+				asset.HighLine,
+			))
+		case asset.IsSeverelyLow:
+			hasLow = true
+			b.WriteString(fmt.Sprintf(
+				"• %s 买入后预计 %.2f%%，低于严重低配线 %.2f%%。\r\n",
+				asset.Name,
+				asset.AfterPct,
+				asset.LowLine,
+			))
 		}
-		hasSellReview = true
-		b.WriteString(fmt.Sprintf(
-			"• %s 当前 %.2f%%，已超过 %.2f%% 提醒线；半年检查时可考虑卖出再平衡。\r\n",
-			asset.Name,
-			asset.CurrentPct,
-			asset.HighLine,
-		))
-	}
-	if !hasSellReview {
-		b.WriteString("• 当前没有资产超过卖出提醒线，无需卖出。\r\n")
 	}
 
-	b.WriteString("\r\n【参考线】\r\n")
+	if !hasHigh && !hasLow {
+		b.WriteString("• 买入后没有资产达到严重超配或严重低配提醒线。\r\n")
+	} else {
+		switch {
+		case hasHigh && hasLow:
+			b.WriteString("• 可考虑卖出部分严重超配资产，并将资金调入严重低配资产；程序仅作提醒，不自动计算卖出。\r\n")
+		case hasHigh:
+			b.WriteString("• 可考虑卖出部分严重超配资产；程序仅作提醒，不自动计算卖出。\r\n")
+		case hasLow:
+			b.WriteString("• 可考虑继续向严重低配资产投入资金；程序仅作提醒。\r\n")
+		}
+	}
+
+	b.WriteString("\r\n【提醒线】\r\n")
 	for _, asset := range result.Assets {
 		b.WriteString(fmt.Sprintf(
-			"• %-12s  明显低配 < %.2f%%｜卖出提醒 > %.2f%%\r\n",
+			"• %-16s 严重低配 < %.2f%%｜严重超配 > %.2f%%\r\n",
 			asset.Name,
 			asset.LowLine,
 			asset.HighLine,
 		))
 	}
 
-	b.WriteString("\r\n说明：买入顺序按“当前金额 ÷ 买入后目标金额”的相对低配程度分层补齐；不依据行情涨跌调整目标比例。")
+	b.WriteString("\r\n说明：所有目标金额都按“当前资产总额 + 本次投入”计算。即使某项资产买入前高于目标，只要它在买入后总额下仍低于目标金额，就会参与买入分配。")
 	return b.String()
 }
 
