@@ -373,6 +373,7 @@ func archiveCurrentInvestment() error {
 
 	resultEdit.SetText(FormatResult(result))
 	historyListModel.PublishRowsReset()
+	refreshTrendView()
 	return nil
 }
 
@@ -426,6 +427,7 @@ func loadInvestmentRecords() error {
 	if os.IsNotExist(err) {
 		investmentRecords = nil
 		historyListModel.PublishRowsReset()
+		refreshTrendView()
 		return nil
 	}
 	if err != nil {
@@ -434,6 +436,7 @@ func loadInvestmentRecords() error {
 
 	investmentRecords = records
 	historyListModel.PublishRowsReset()
+	refreshTrendView()
 	return nil
 }
 
@@ -570,6 +573,7 @@ func importInvestmentRecords() {
 	investmentRecords = records
 	resetHistorySelection()
 	historyListModel.PublishRowsReset()
+	refreshTrendView()
 	if len(investmentRecords) > 0 && historyTable != nil {
 		_ = historyTable.SetCurrentIndex(0)
 		showSelectedHistoryRecord()
@@ -750,6 +754,7 @@ func saveHistoryChanges() error {
 	}
 
 	historyListModel.PublishRowsReset()
+	refreshTrendView()
 	for i := range investmentRecords {
 		if investmentRecords[i].ID == recordID {
 			selectedHistoryIndex = i
@@ -817,6 +822,7 @@ func deleteSelectedHistoryRecord() {
 	historyListModel.PublishRowsReset()
 	historyAssetModel.PublishRowsReset()
 	historyDetailPanel.SetEnabled(false)
+	refreshTrendView()
 	statusBarItem.SetText("历史投资记录已删除")
 }
 

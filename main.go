@@ -137,8 +137,11 @@ func main() {
 				ContentMarginsZero: true,
 				StretchFactor:      1,
 				OnCurrentIndexChanged: func() {
-					if mainTabs.CurrentIndex() == 1 {
+					switch mainTabs.CurrentIndex() {
+					case 1:
 						refreshHistoryView()
+					case 2:
+						refreshTrendView()
 					}
 				},
 				Pages: []TabPage{
@@ -156,6 +159,13 @@ func main() {
 							buildHistoryPage(),
 						},
 					},
+					{
+						Title:  "历史资产趋势",
+						Layout: VBox{Margins: Margins{Left: 2, Top: 6, Right: 2, Bottom: 2}},
+						Children: []Widget{
+							buildTrendPage(),
+						},
+					},
 				},
 			},
 		},
@@ -170,6 +180,7 @@ func main() {
 	if err := loadInvestmentRecords(); err != nil {
 		statusBarItem.SetText("历史记录读取失败：" + err.Error())
 	}
+	refreshTrendView()
 	mainWindow.Run()
 }
 
