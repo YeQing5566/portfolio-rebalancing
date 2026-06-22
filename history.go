@@ -491,11 +491,15 @@ func exportInvestmentRecords() {
 		return
 	}
 
+	fileName := "investment_records_export_" + time.Now().Format("20060102_150405") + ".json"
 	dlg := walk.FileDialog{
-		Title:          "选择历史记录导出文件夹",
+		Title:          "导出历史投资记录",
+		FilePath:       fileName,
+		Filter:         jsonFileFilter,
+		FilterIndex:    1,
 		InitialDirPath: filepath.Dir(basePath),
 	}
-	accepted, err := dlg.ShowBrowseFolder(mainWindow)
+	accepted, err := dlg.ShowSave(mainWindow)
 	if err != nil {
 		walk.MsgBox(mainWindow, "导出失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
@@ -504,8 +508,10 @@ func exportInvestmentRecords() {
 		return
 	}
 
-	fileName := "investment_records_export_" + time.Now().Format("20060102_150405") + ".json"
-	targetPath := filepath.Join(dlg.FilePath, fileName)
+	targetPath := strings.TrimSpace(dlg.FilePath)
+	if strings.EqualFold(filepath.Ext(targetPath), "") {
+		targetPath += ".json"
+	}
 	if _, err := os.Stat(targetPath); err == nil {
 		if walk.MsgBox(
 			mainWindow,
