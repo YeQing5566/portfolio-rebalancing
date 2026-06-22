@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -10,17 +9,6 @@ import (
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 )
-
-const configFile = "portfolio_config.json"
-
-type Config struct {
-	Version      int                `json:"version,omitempty"`
-	InvestAmount string             `json:"invest_amount"`
-	Assets       []AssetInput       `json:"assets,omitempty"`
-	CurrentTotal string             `json:"current_total,omitempty"`
-	CurrentPcts  map[string]float64 `json:"current_pcts,omitempty"`
-	AssetsText   string             `json:"assets_text,omitempty"`
-}
 
 type AssetTableModel struct {
 	walk.TableModelBase
@@ -93,6 +81,7 @@ func (m *AssetTableModel) RefreshAll() {
 
 var (
 	mainWindow        *walk.MainWindow
+	mainTabs          *walk.TabWidget
 	investAmountEdit  *walk.NumberEdit
 	assetTable        *walk.TableView
 	assetModel        = &AssetTableModel{}
@@ -143,50 +132,28 @@ func main() {
 		},
 		Children: []Widget{
 			buildHeader(),
-			VSplitter{
-				HandleWidth:   7,
-				StretchFactor: 1,
-				Children: []Widget{
-					Composite{
-						StretchFactor: 2,
-						Layout: VBox{
-							MarginsZero: true,
-							Spacing:     8,
-						},
+			TabWidget{
+				AssignTo:           &mainTabs,
+				ContentMarginsZero: true,
+				StretchFactor:      1,
+				OnCurrentIndexChanged: func() {
+					if mainTabs.CurrentIndex() == 1 {
+						refreshHistoryView()
+					}
+				},
+				Pages: []TabPage{
+					{
+						Title:  "再平衡计算",
+						Layout: VBox{Margins: Margins{Left: 2, Top: 6, Right: 2, Bottom: 2}},
 						Children: []Widget{
-							Composite{
-								StretchFactor: 1,
-								Layout: HBox{
-									MarginsZero: true,
-									Spacing:     8,
-								},
-								Children: []Widget{
-									buildOverviewPanel(),
-									buildAssetPanel(),
-								},
-							},
-							buildActionBar(),
+							buildCalculatorPage(),
 						},
 					},
-					GroupBox{
-						Title:         "再平衡建议",
-						MinSize:       Size{Height: 160},
-						StretchFactor: 3,
-						Background:    panelBackground,
-						Layout: VBox{
-							Margins: Margins{Left: 10, Top: 12, Right: 10, Bottom: 10},
-						},
+					{
+						Title:  "历史投资记录",
+						Layout: VBox{Margins: Margins{Left: 2, Top: 6, Right: 2, Bottom: 2}},
 						Children: []Widget{
-							TextEdit{
-								AssignTo:      &resultEdit,
-								ReadOnly:      true,
-								VScroll:       true,
-								Background:    resultBackground,
-								TextColor:     defaultTextColor,
-								Font:          Font{Family: "Microsoft YaHei UI", PointSize: 10},
-								StretchFactor: 1,
-								Text:          initialResultText(),
-							},
+							buildHistoryPage(),
 						},
 					},
 				},
@@ -200,7 +167,61 @@ func main() {
 
 	_ = investAmountEdit.SetValue(5000)
 	refreshAssetSummary()
+	if err := loadInvestmentRecords(); err != nil {
+		statusBarItem.SetText("历史记录读取失败：" + err.Error())
+	}
 	mainWindow.Run()
+}
+
+func buildCalculatorPage() Widget {
+	return VSplitter{
+		HandleWidth:   7,
+		StretchFactor: 1,
+		Children: []Widget{
+			Composite{
+				StretchFactor: 2,
+				Layout: VBox{
+					MarginsZero: true,
+					Spacing:     8,
+				},
+				Children: []Widget{
+					Composite{
+						StretchFactor: 1,
+						Layout: HBox{
+							MarginsZero: true,
+							Spacing:     8,
+						},
+						Children: []Widget{
+							buildOverviewPanel(),
+							buildAssetPanel(),
+						},
+					},
+					buildActionBar(),
+				},
+			},
+			GroupBox{
+				Title:         "再平衡建议",
+				MinSize:       Size{Height: 160},
+				StretchFactor: 3,
+				Background:    panelBackground,
+				Layout: VBox{
+					Margins: Margins{Left: 10, Top: 12, Right: 10, Bottom: 10},
+				},
+				Children: []Widget{
+					TextEdit{
+						AssignTo:      &resultEdit,
+						ReadOnly:      true,
+						VScroll:       true,
+						Background:    resultBackground,
+						TextColor:     defaultTextColor,
+						Font:          Font{Family: "Microsoft YaHei UI", PointSize: 10},
+						StretchFactor: 1,
+						Text:          initialResultText(),
+					},
+				},
+			},
+		},
+	}
 }
 
 func buildHeader() Widget {
@@ -426,25 +447,14 @@ func buildActionBar() Widget {
 			},
 			HSpacer{},
 			PushButton{
-				Text:    "保存配置",
-				MinSize: Size{Width: 100, Height: 28},
+				Text:    "保存当次信息到投资记录",
+				MinSize: Size{Width: 190, Height: 28},
 				OnClicked: func() {
-					if err := saveConfig(); err != nil {
+					if err := archiveCurrentInvestment(); err != nil {
 						walk.MsgBox(mainWindow, "保存失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 						return
 					}
-					statusBarItem.SetText("配置已保存到 " + configFile)
-				},
-			},
-			PushButton{
-				Text:    "读取配置",
-				MinSize: Size{Width: 100, Height: 28},
-				OnClicked: func() {
-					if err := loadConfig(); err != nil {
-						walk.MsgBox(mainWindow, "读取失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-						return
-					}
-					statusBarItem.SetText("配置已读取")
+					statusBarItem.SetText("本次投资信息已归档到程序目录")
 				},
 			},
 			PushButton{
@@ -674,60 +684,6 @@ func calculateFromForm() (string, error) {
 	return FormatResult(result), nil
 }
 
-func saveConfig() error {
-	cfg := Config{
-		Version:      2,
-		InvestAmount: formatNumber(investAmountEdit.Value()),
-		Assets:       assetModel.ItemsCopy(),
-	}
-
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("生成配置失败：%w", err)
-	}
-	if err := os.WriteFile(configFile, data, 0644); err != nil {
-		return fmt.Errorf("写入配置失败：%w", err)
-	}
-	return nil
-}
-
-func loadConfig() error {
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return fmt.Errorf("读取 %s 失败：%w", configFile, err)
-	}
-
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("配置文件格式错误：%w", err)
-	}
-
-	investAmount, err := parseNumber(cfg.InvestAmount)
-	if err != nil {
-		return fmt.Errorf("配置中的可投入金额无效")
-	}
-
-	items := cfg.Assets
-	if len(items) == 0 {
-		items, err = migrateLegacyConfig(cfg)
-		if err != nil {
-			return err
-		}
-	}
-	if err := validateDraftAssets(items); err != nil {
-		return err
-	}
-
-	if err := investAmountEdit.SetValue(investAmount); err != nil {
-		return fmt.Errorf("配置中的可投入金额超出允许范围")
-	}
-	closeInlineEditor()
-	assetModel.SetItems(items)
-	refreshAssetSummary()
-	resultEdit.SetText(initialResultText())
-	return nil
-}
-
 func validateDraftAssets(items []AssetInput) error {
 	seen := make(map[string]struct{}, len(items))
 	for i, item := range items {
@@ -748,88 +704,6 @@ func validateDraftAssets(items []AssetInput) error {
 		}
 	}
 	return nil
-}
-
-func migrateLegacyConfig(cfg Config) ([]AssetInput, error) {
-	currentTotal, err := parseNumber(cfg.CurrentTotal)
-	if err != nil {
-		return nil, fmt.Errorf("旧配置中的当前总资产无效")
-	}
-
-	if strings.TrimSpace(cfg.AssetsText) != "" {
-		return parseLegacyAssetsText(cfg.AssetsText, currentTotal)
-	}
-
-	if len(cfg.CurrentPcts) > 0 {
-		legacyTargets := map[string]float64{
-			"标普500ETF":  33,
-			"纳指100ETF":  17,
-			"中证A500ETF": 33,
-			"红利低波ETF":   17,
-		}
-		items := make([]AssetInput, 0, len(cfg.CurrentPcts))
-		for name, currentPct := range cfg.CurrentPcts {
-			targetPct, ok := legacyTargets[name]
-			if !ok {
-				return nil, fmt.Errorf("旧配置缺少 %s 的目标仓位，无法自动迁移", name)
-			}
-			items = append(items, AssetInput{
-				Name:          name,
-				TargetPct:     targetPct,
-				CurrentAmount: currentTotal * currentPct / 100,
-			})
-		}
-		return items, nil
-	}
-
-	return nil, fmt.Errorf("配置中没有资产条目")
-}
-
-func parseLegacyAssetsText(text string, currentTotal float64) ([]AssetInput, error) {
-	items := make([]AssetInput, 0)
-	for lineIndex, rawLine := range strings.Split(text, "\n") {
-		line := strings.TrimSpace(rawLine)
-		if line == "" {
-			continue
-		}
-
-		parts := strings.Split(line, ",")
-		if len(parts) < 3 {
-			return nil, fmt.Errorf("旧配置第 %d 行格式错误", lineIndex+1)
-		}
-
-		targetPct, err := parseNumber(parts[1])
-		if err != nil {
-			return nil, fmt.Errorf("旧配置第 %d 行目标仓位无效", lineIndex+1)
-		}
-		currentPct, err := parseNumber(parts[2])
-		if err != nil {
-			return nil, fmt.Errorf("旧配置第 %d 行当前仓位无效", lineIndex+1)
-		}
-
-		items = append(items, AssetInput{
-			Name:          strings.TrimSpace(parts[0]),
-			TargetPct:     targetPct,
-			CurrentAmount: currentTotal * currentPct / 100,
-		})
-	}
-	return items, nil
-}
-
-func parseNumber(value string) (float64, error) {
-	value = strings.TrimSpace(value)
-	value = strings.ReplaceAll(value, ",", "")
-	value = strings.ReplaceAll(value, "，", "")
-	value = strings.ReplaceAll(value, "%", "")
-	value = strings.ReplaceAll(value, "％", "")
-	if value == "" {
-		return 0, nil
-	}
-	return strconv.ParseFloat(value, 64)
-}
-
-func formatNumber(value float64) string {
-	return strconv.FormatFloat(value, 'f', 2, 64)
 }
 
 func initialResultText() string {

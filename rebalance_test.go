@@ -154,20 +154,44 @@ func TestCalculatePortfolioRejectsInvalidTargetSum(t *testing.T) {
 	}
 }
 
-func TestParseLegacyAssetsTextConvertsPercentagesToAmounts(t *testing.T) {
-	items, err := parseLegacyAssetsText(
-		"资产A,60,30,99,88\n"+
-			"资产B,40,70,77,66\n",
-		100000,
-	)
+func TestInvestmentRecordStoresBeforeAndAfterDetails(t *testing.T) {
+	result, err := CalculatePortfolio(10000, []AssetInput{
+		{Name: "资产A", TargetPct: 40, CurrentAmount: 50000},
+		{Name: "资产B", TargetPct: 60, CurrentAmount: 50000},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	assertClose(t, items[0].TargetPct, 60, 0)
-	assertClose(t, items[0].CurrentAmount, 30000, 0.01)
-	assertClose(t, items[1].TargetPct, 40, 0)
-	assertClose(t, items[1].CurrentAmount, 70000, 0.01)
+	record := recordFromResult(result)
+	if len(record.Assets) != 2 {
+		t.Fatalf("expected two archived assets, got %d", len(record.Assets))
+	}
+	assertClose(t, record.CurrentTotal, 100000, 0.01)
+	assertClose(t, record.AfterTotal, 110000, 0.01)
+	assertClose(t, record.AllocatedCash, 10000, 0.01)
+	for i, asset := range record.Assets {
+		assertClose(t, asset.AfterAmount, asset.BeforeAmount+asset.BuyAmount, 0.01)
+		assertClose(t, asset.AfterPct, result.Assets[i].AfterPct, 0.0001)
+	}
+}
+
+func TestRecalculateInvestmentRecordAfterEditing(t *testing.T) {
+	record := InvestmentRecord{
+		InvestAmount: 10000,
+		Assets: []InvestmentAssetRecord{
+			{Name: "资产A", TargetPct: 40, BeforeAmount: 50000, BuyAmount: 0},
+			{Name: "资产B", TargetPct: 60, BeforeAmount: 50000, BuyAmount: 10000},
+		},
+	}
+
+	recalculateInvestmentRecord(&record)
+	assertClose(t, record.CurrentTotal, 100000, 0.01)
+	assertClose(t, record.AllocatedCash, 10000, 0.01)
+	assertClose(t, record.AfterTotal, 110000, 0.01)
+	assertClose(t, record.Assets[0].BeforePct, 50, 0.0001)
+	assertClose(t, record.Assets[1].AfterAmount, 60000, 0.01)
+	assertClose(t, record.Assets[1].AfterPct, 54.5454545, 0.0001)
 }
 
 func assertClose(t *testing.T, got, want, tolerance float64) {
