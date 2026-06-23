@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -194,9 +195,169 @@ func TestRecalculateInvestmentRecordAfterEditing(t *testing.T) {
 	assertClose(t, record.Assets[1].AfterPct, 54.5454545, 0.0001)
 }
 
+func TestFormatResultAlignsSuggestedBuyColumns(t *testing.T) {
+	result := &PortfolioResult{
+		Assets: []*AssetResult{
+			{
+				Name:          "短",
+				TargetPct:     3,
+				CurrentPct:    1,
+				AfterPct:      2,
+				CurrentAmount: 100,
+				BuyAmount:     10,
+				Status:        "略低于目标",
+			},
+			{
+				Name:          "很长的资产名称B",
+				TargetPct:     34,
+				CurrentPct:    12,
+				AfterPct:      23,
+				CurrentAmount: 2000,
+				BuyAmount:     1000,
+				Status:        "接近目标",
+			},
+			{
+				Name:          "零买入",
+				TargetPct:     63,
+				CurrentPct:    87,
+				AfterPct:      75,
+				CurrentAmount: 3000,
+				BuyAmount:     0,
+				Status:        "略高于目标",
+			},
+		},
+	}
+
+	output := FormatResult(result)
+	rows := resultSectionRows(t, output, "建议买入")
+	if len(rows) != 3 {
+		t.Fatalf("expected three suggested buy rows, got %d: %#v", len(rows), rows)
+	}
+
+	if strings.Contains(output, "【建议买入】") || strings.Contains(output, "【全部资产】") {
+		t.Fatalf("section headings should not use square brackets:\n%s", output)
+	}
+	if strings.Contains(output, "全部资产") {
+		t.Fatalf("all-assets table should not be printed in the compact suggestion output:\n%s", output)
+	}
+	if strings.Contains(output, "说明：") {
+		t.Fatalf("final explanatory note should not be printed:\n%s", output)
+	}
+	if header := resultSectionHeader(t, output, "建议买入"); !strings.HasPrefix(header, "资产") {
+		t.Fatalf("suggested buy table should start at the left edge, got %q", header)
+	}
+	header := resultSectionHeader(t, output, "建议买入")
+	assertSameDisplayColumn(t, header, "买入金额", rows[0], "10 元")
+	assertSameDisplayColumn(t, header, "当前仓位", rows[0], "1%")
+	assertSameDisplayColumn(t, header, "买入后仓位", rows[0], "2%")
+	assertSameDisplayColumn(t, header, "目标仓位", rows[0], "3%")
+
+	assertSameDisplayColumn(t, rows[0], "10 元", rows[1], "1,000 元")
+	assertSameDisplayColumn(t, rows[0], "1%", rows[1], "12%")
+	assertSameDisplayColumn(t, rows[0], "2%", rows[1], "23%")
+	assertSameDisplayColumn(t, rows[0], "3%", rows[1], "34%")
+	assertSameDisplayColumn(t, rows[0], "10 元", rows[2], "0 元")
+	assertSameDisplayColumn(t, rows[0], "1%", rows[2], "87%")
+	if !strings.Contains(rows[2], "0 元") {
+		t.Fatalf("non-buying assets should still be shown with zero buy amount, got %q", rows[2])
+	}
+}
+
+func TestFormatResultShowsSevereLowReminderFromCalculatedPercent(t *testing.T) {
+	result, err := CalculatePortfolio(0, []AssetInput{
+		{Name: "高目标资产", TargetPct: 99, CurrentAmount: 100},
+		{Name: "低目标资产", TargetPct: 1, CurrentAmount: 50},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output := FormatResult(result)
+	if !strings.Contains(output, "严重偏离提醒") {
+		t.Fatalf("expected severe reminder section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "高目标资产 买入后预计 66.67%，低于严重低配线 74.25%。") {
+		t.Fatalf("expected severe low reminder for high target asset, got:\n%s", output)
+	}
+	if !strings.Contains(output, "0 元") {
+		t.Fatalf("expected zero buy amounts to be shown, got:\n%s", output)
+	}
+}
+
 func assertClose(t *testing.T, got, want, tolerance float64) {
 	t.Helper()
 	if math.Abs(got-want) > tolerance {
 		t.Fatalf("got %.8f, want %.8f (tolerance %.8f)", got, want, tolerance)
 	}
+}
+
+func resultSectionRows(t *testing.T, text, heading string) []string {
+	t.Helper()
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	inSection := false
+	rows := make([]string, 0)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == heading {
+			inSection = true
+			continue
+		}
+		if !inSection {
+			continue
+		}
+		if resultTestHeading(trimmed) || trimmed == "" {
+			if len(rows) > 0 {
+				break
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "-") || strings.HasPrefix(trimmed, "资产") {
+			continue
+		}
+		rows = append(rows, line)
+	}
+	return rows
+}
+
+func resultSectionHeader(t *testing.T, text, heading string) string {
+	t.Helper()
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) == heading {
+			for _, next := range lines[i+1:] {
+				if strings.TrimSpace(next) != "" {
+					return next
+				}
+			}
+		}
+	}
+	t.Fatalf("section heading %q not found in output:\n%s", heading, text)
+	return ""
+}
+
+func resultTestHeading(line string) bool {
+	switch line {
+	case "建议买入", "严重偏离提醒", "说明：":
+		return true
+	default:
+		return strings.HasPrefix(line, "说明：")
+	}
+}
+
+func assertSameDisplayColumn(t *testing.T, leftLine, leftValue, rightLine, rightValue string) {
+	t.Helper()
+	left := displayColumnStart(t, leftLine, leftValue)
+	right := displayColumnStart(t, rightLine, rightValue)
+	if left != right {
+		t.Fatalf("%q starts at display column %d, %q starts at display column %d\nleft:  %q\nright: %q", leftValue, left, rightValue, right, leftLine, rightLine)
+	}
+}
+
+func displayColumnStart(t *testing.T, line, value string) int {
+	t.Helper()
+	index := strings.Index(line, value)
+	if index < 0 {
+		t.Fatalf("value %q not found in line %q", value, line)
+	}
+	return displayWidth(line[:index])
 }

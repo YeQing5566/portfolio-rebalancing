@@ -52,50 +52,58 @@ var (
 	trendRangeUserSet    bool
 	trendRefreshingCards bool
 	trendPalette         = []walk.Color{
-		walk.RGB(31, 111, 235),
-		walk.RGB(230, 126, 34),
-		walk.RGB(46, 160, 67),
-		walk.RGB(186, 104, 200),
-		walk.RGB(214, 68, 68),
-		walk.RGB(0, 151, 167),
-		walk.RGB(133, 88, 255),
-		walk.RGB(102, 153, 0),
-		walk.RGB(204, 85, 0),
-		walk.RGB(0, 102, 204),
+		walk.RGB(255, 153, 0),
+		walk.RGB(56, 189, 248),
+		walk.RGB(34, 197, 94),
+		walk.RGB(244, 114, 182),
+		walk.RGB(168, 85, 247),
+		walk.RGB(239, 68, 68),
+		walk.RGB(20, 184, 166),
+		walk.RGB(250, 204, 21),
+		walk.RGB(129, 140, 248),
+		walk.RGB(245, 245, 245),
 	}
 )
 
 func buildTrendPage() Widget {
 	return Composite{
+		Background: windowBackground,
 		Layout: HBox{
 			MarginsZero: true,
-			Spacing:     8,
+			Spacing:     10,
 		},
 		Children: []Widget{
-			GroupBox{
-				Title:      "资产选择",
+			Composite{
 				MinSize:    Size{Width: 260},
-				MaxSize:    Size{Width: 300, Height: 2000},
+				MaxSize:    Size{Width: 320, Height: 2000},
 				Background: panelBackground,
+				Border:     true,
 				Layout: VBox{
-					Margins: Margins{Left: 8, Top: 10, Right: 8, Bottom: 8},
-					Spacing: 8,
+					Margins: Margins{Left: 14, Top: 14, Right: 14, Bottom: 12},
+					Spacing: 9,
 				},
 				Children: []Widget{
 					Label{
-						Text:      "勾选要显示的资产趋势",
+						Text:      "资产选择",
+						TextColor: defaultTextColor,
+						Font:      Font{Family: "Microsoft YaHei UI", PointSize: 12, Bold: true},
+					},
+					Label{
+						Text:      "勾选需要对比的资产或总资产曲线",
 						TextColor: mutedTextColor,
 					},
 					ScrollView{
 						HorizontalFixed: true,
 						StretchFactor:   1,
+						Background:      panelBackground,
 						Layout: VBox{
 							MarginsZero: true,
 							Spacing:     6,
 						},
 						Children: []Widget{
 							Composite{
-								AssignTo: &trendSeriesPanel,
+								AssignTo:   &trendSeriesPanel,
+								Background: panelBackground,
 								Layout: VBox{
 									MarginsZero: true,
 									Spacing:     6,
@@ -110,21 +118,28 @@ func buildTrendPage() Widget {
 					},
 				},
 			},
-			GroupBox{
-				Title:         "资产金额变化趋势",
+			Composite{
 				StretchFactor: 1,
 				Background:    panelBackground,
+				Border:        true,
 				Layout: VBox{
-					Margins: Margins{Left: 10, Top: 12, Right: 10, Bottom: 10},
-					Spacing: 8,
+					Margins: Margins{Left: 14, Top: 14, Right: 14, Bottom: 12},
+					Spacing: 9,
 				},
 				Children: []Widget{
 					Composite{
+						Background: panelBackground,
 						Layout: HBox{
 							MarginsZero: true,
 							Spacing:     8,
 						},
 						Children: []Widget{
+							Label{
+								Text:      "资产金额变化趋势",
+								TextColor: defaultTextColor,
+								Font:      Font{Family: "Microsoft YaHei UI", PointSize: 12, Bold: true},
+							},
+							HSpacer{},
 							Label{
 								Text:      "开始月份",
 								TextColor: mutedTextColor,
@@ -135,6 +150,8 @@ func buildTrendPage() Widget {
 								ToolTipText:       "示例：2026-01",
 								MinSize:           Size{Width: 96},
 								MaxSize:           Size{Width: 112, Height: 100},
+								Background:        fieldBackground,
+								TextColor:         defaultTextColor,
 								OnEditingFinished: applyTrendRangeFromInputs,
 							},
 							Label{
@@ -147,29 +164,23 @@ func buildTrendPage() Widget {
 								ToolTipText:       "示例：2026-12",
 								MinSize:           Size{Width: 96},
 								MaxSize:           Size{Width: 112, Height: 100},
+								Background:        fieldBackground,
+								TextColor:         defaultTextColor,
 								OnEditingFinished: applyTrendRangeFromInputs,
 							},
 							PushButton{
-								Text:    "应用范围",
-								MinSize: Size{Width: 88, Height: 28},
-								OnClicked: func() {
-									applyTrendRangeFromInputs()
-								},
-							},
-							PushButton{
 								Text:    "查看最近一年",
-								MinSize: Size{Width: 110, Height: 28},
+								MinSize: Size{Width: 112, Height: 30},
 								OnClicked: func() {
 									setTrendRecentYear()
 								},
 							},
-							HSpacer{},
 						},
 					},
 					Label{
 						AssignTo:  &trendRangeLabel,
 						Text:      "暂无历史记录",
-						TextColor: mutedTextColor,
+						TextColor: secondaryColor,
 					},
 					CustomWidget{
 						AssignTo:            &trendChartWidget,
@@ -272,17 +283,17 @@ func addTrendSeriesCard(name string, color walk.Color) {
 	if err != nil {
 		return
 	}
-	if err := card.SetMinMaxSize(walk.Size{Width: 218, Height: 42}, walk.Size{Width: 1000, Height: 42}); err != nil {
+	if err := card.SetMinMaxSize(walk.Size{Width: 232, Height: 44}, walk.Size{Width: 1000, Height: 44}); err != nil {
 		return
 	}
-	bg, err := walk.NewSolidColorBrush(walk.RGB(250, 252, 255))
+	bg, err := walk.NewSolidColorBrush(walk.RGB(29, 32, 37))
 	if err == nil {
 		card.SetBackground(bg)
 		card.AddDisposable(bg)
 	}
 	layout := walk.NewHBoxLayout()
-	_ = layout.SetMargins(walk.Margins{8, 5, 8, 5})
-	_ = layout.SetSpacing(8)
+	_ = layout.SetMargins(walk.Margins{10, 6, 10, 6})
+	_ = layout.SetSpacing(9)
 	_ = card.SetLayout(layout)
 
 	swatch, err := walk.NewLabel(card)
@@ -296,9 +307,9 @@ func addTrendSeriesCard(name string, color walk.Color) {
 	if err != nil {
 		return
 	}
-	_ = checkBox.SetText(name)
+	_ = checkBox.SetText("")
 	checkBox.SetChecked(trendSelections[name])
-	_ = checkBox.SetMinMaxSize(walk.Size{Width: 168, Height: 26}, walk.Size{})
+	_ = checkBox.SetMinMaxSize(walk.Size{Width: 24, Height: 28}, walk.Size{Width: 24, Height: 28})
 	checkBox.CheckedChanged().Attach(func() {
 		if trendRefreshingCards {
 			return
@@ -306,6 +317,17 @@ func addTrendSeriesCard(name string, color walk.Color) {
 		trendSelections[name] = checkBox.Checked()
 		redrawTrendChart()
 	})
+	nameLabel, err := walk.NewLabel(card)
+	if err == nil {
+		_ = nameLabel.SetText(name)
+		nameLabel.SetTextColor(defaultTextColor)
+		_ = nameLabel.SetMinMaxSize(walk.Size{Width: 154, Height: 28}, walk.Size{})
+		nameLabel.MouseDown().Attach(func(_ int, _ int, button walk.MouseButton) {
+			if button == walk.LeftButton {
+				checkBox.SetChecked(!checkBox.Checked())
+			}
+		})
+	}
 	card.MouseDown().Attach(func(_ int, _ int, button walk.MouseButton) {
 		if button == walk.LeftButton {
 			checkBox.SetChecked(!checkBox.Checked())
@@ -601,7 +623,7 @@ func paintTrendChart(canvas *walk.Canvas, _ walk.Rectangle) error {
 	}
 
 	bounds := trendChartWidget.ClientBoundsPixels()
-	fillRect(canvas, walk.RGB(250, 252, 255), bounds)
+	fillRect(canvas, walk.RGB(15, 17, 20), bounds)
 	if bounds.Width <= 0 || bounds.Height <= 0 {
 		return nil
 	}
@@ -627,6 +649,7 @@ func paintTrendChart(canvas *walk.Canvas, _ walk.Rectangle) error {
 	}
 
 	minValue, maxValue := trendValueRange(data.Series)
+	fillRect(canvas, walk.RGB(12, 14, 17), plot)
 	drawTrendGrid(canvas, plot, minValue, maxValue)
 	drawTrendXAxis(canvas, plot, data.Months)
 	drawTrendLines(canvas, plot, data, minValue, maxValue)
@@ -645,10 +668,10 @@ func drawCenteredChartMessage(canvas *walk.Canvas, bounds walk.Rectangle, messag
 }
 
 func drawTrendGrid(canvas *walk.Canvas, plot walk.Rectangle, minValue, maxValue float64) {
-	axisPen, axisBrush := newChartPen(walk.RGB(160, 172, 188), 1)
+	axisPen, axisBrush := newChartPen(walk.RGB(67, 78, 92), 1)
 	defer axisPen.Dispose()
 	defer axisBrush.Dispose()
-	gridPen, gridBrush := newChartPen(walk.RGB(224, 231, 240), 1)
+	gridPen, gridBrush := newChartPen(walk.RGB(37, 43, 52), 1)
 	defer gridPen.Dispose()
 	defer gridBrush.Dispose()
 
@@ -674,7 +697,7 @@ func drawTrendXAxis(canvas *walk.Canvas, plot walk.Rectangle, months []time.Time
 		return
 	}
 
-	tickPen, tickBrush := newChartPen(walk.RGB(196, 206, 219), 1)
+	tickPen, tickBrush := newChartPen(walk.RGB(67, 78, 92), 1)
 	defer tickPen.Dispose()
 	defer tickBrush.Dispose()
 	step := maxInt(1, int(math.Ceil(float64(len(months))/8)))
@@ -699,7 +722,7 @@ func drawTrendXAxis(canvas *walk.Canvas, plot walk.Rectangle, months []time.Time
 
 func drawTrendLines(canvas *walk.Canvas, plot walk.Rectangle, data trendChartData, minValue, maxValue float64) {
 	for _, series := range data.Series {
-		pen, penBrush := newChartPen(series.Color, 2)
+		pen, penBrush := newChartPen(series.Color, 3)
 		brush, err := walk.NewSolidColorBrush(series.Color)
 		if err != nil {
 			pen.Dispose()
@@ -719,7 +742,7 @@ func drawTrendLines(canvas *walk.Canvas, plot walk.Rectangle, data trendChartDat
 			if previous != nil {
 				_ = canvas.DrawLinePixels(pen, *previous, current)
 			}
-			_ = canvas.FillEllipsePixels(brush, walk.Rectangle{X: current.X - 3, Y: current.Y - 3, Width: 6, Height: 6})
+			_ = canvas.FillEllipsePixels(brush, walk.Rectangle{X: current.X - 4, Y: current.Y - 4, Width: 8, Height: 8})
 			copyPoint := current
 			previous = &copyPoint
 		}
@@ -831,9 +854,9 @@ func formatCompactMoney(value float64) string {
 	abs := math.Abs(value)
 	switch {
 	case abs >= 100000000:
-		return fmt.Sprintf("%.2f亿", value/100000000)
+		return formatFlexibleNumber(value/100000000, 2) + "亿"
 	case abs >= 10000:
-		return fmt.Sprintf("%.2f万", value/10000)
+		return formatFlexibleNumber(value/10000, 2) + "万"
 	default:
 		return formatMoney(value)
 	}

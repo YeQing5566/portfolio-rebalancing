@@ -97,16 +97,25 @@ var (
 	editorOriginal    AssetInput
 	editorIsNew       bool
 	loadingEditor     bool
-	defaultTextColor  = walk.RGB(35, 46, 66)
-	mutedTextColor    = walk.RGB(99, 115, 138)
-	accentColor       = walk.RGB(31, 111, 235)
-	windowBackground  = SolidColorBrush{Color: walk.RGB(245, 247, 251)}
-	panelBackground   = SolidColorBrush{Color: walk.RGB(255, 255, 255)}
-	headerBackground  = SolidColorBrush{Color: walk.RGB(30, 53, 87)}
-	resultBackground  = SolidColorBrush{Color: walk.RGB(250, 252, 255)}
+	loadingPortfolio  bool
+	defaultTextColor  = walk.RGB(245, 245, 245)
+	mutedTextColor    = walk.RGB(163, 163, 163)
+	accentColor       = walk.RGB(255, 153, 0)
+	secondaryColor    = walk.RGB(255, 177, 59)
+	warningColor      = walk.RGB(251, 191, 36)
+	dangerColor       = walk.RGB(239, 68, 68)
+	windowBackground  = SolidColorBrush{Color: walk.RGB(8, 8, 8)}
+	panelBackground   = SolidColorBrush{Color: walk.RGB(18, 18, 18)}
+	headerBackground  = SolidColorBrush{Color: walk.RGB(0, 0, 0)}
+	resultBackground  = SolidColorBrush{Color: walk.RGB(18, 18, 18)}
+	fieldBackground   = SolidColorBrush{Color: walk.RGB(31, 31, 31)}
+	tableBackground   = SolidColorBrush{Color: walk.RGB(18, 18, 18)}
+	tableRowColor     = walk.RGB(21, 21, 21)
+	tableAltRowColor  = walk.RGB(26, 26, 26)
+	tableSelectColor  = walk.RGB(49, 34, 12)
 )
 
-func main() {
+func runClassicApp() {
 	walk.AppendToWalkInit(func() {
 		walk.FocusEffect, _ = walk.NewBorderGlowEffect(accentColor)
 		walk.ValidationErrorEffect, _ = walk.NewBorderGlowEffect(walk.RGB(210, 55, 55))
@@ -115,18 +124,18 @@ func main() {
 	window := MainWindow{
 		AssignTo:   &mainWindow,
 		Title:      "投资组合再平衡助手",
-		MinSize:    Size{Width: 1020, Height: 700},
-		Size:       Size{Width: 1180, Height: 840},
+		MinSize:    Size{Width: 1100, Height: 720},
+		Size:       Size{Width: 1260, Height: 860},
 		Font:       Font{Family: "Microsoft YaHei UI", PointSize: 10},
 		Background: windowBackground,
 		Layout: VBox{
-			Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 8},
-			Spacing: 8,
+			Margins: Margins{Left: 14, Top: 14, Right: 14, Bottom: 10},
+			Spacing: 10,
 		},
 		StatusBarItems: []StatusBarItem{
 			{
 				AssignTo: &statusBarItem,
-				Text:     "先添加至少两项资产，并使目标仓位合计为 100%",
+				Text:     "",
 				Width:    780,
 			},
 		},
@@ -135,6 +144,7 @@ func main() {
 			TabWidget{
 				AssignTo:           &mainTabs,
 				ContentMarginsZero: true,
+				Background:         windowBackground,
 				StretchFactor:      1,
 				OnCurrentIndexChanged: func() {
 					switch mainTabs.CurrentIndex() {
@@ -146,22 +156,25 @@ func main() {
 				},
 				Pages: []TabPage{
 					{
-						Title:  "再平衡计算",
-						Layout: VBox{Margins: Margins{Left: 2, Top: 6, Right: 2, Bottom: 2}},
+						Title:      "平衡买入计算",
+						Background: windowBackground,
+						Layout:     VBox{Margins: Margins{Left: 0, Top: 8, Right: 0, Bottom: 0}},
 						Children: []Widget{
 							buildCalculatorPage(),
 						},
 					},
 					{
-						Title:  "历史投资记录",
-						Layout: VBox{Margins: Margins{Left: 2, Top: 6, Right: 2, Bottom: 2}},
+						Title:      "历史投资记录",
+						Background: windowBackground,
+						Layout:     VBox{Margins: Margins{Left: 0, Top: 8, Right: 0, Bottom: 0}},
 						Children: []Widget{
 							buildHistoryPage(),
 						},
 					},
 					{
-						Title:  "历史资产趋势",
-						Layout: VBox{Margins: Margins{Left: 2, Top: 6, Right: 2, Bottom: 2}},
+						Title:      "历史资产趋势",
+						Background: windowBackground,
+						Layout:     VBox{Margins: Margins{Left: 0, Top: 8, Right: 0, Bottom: 0}},
 						Children: []Widget{
 							buildTrendPage(),
 						},
@@ -175,7 +188,7 @@ func main() {
 		showStartupError(err)
 	}
 
-	_ = investAmountEdit.SetValue(5000)
+	loadPortfolioIntoClassic()
 	refreshAssetSummary()
 	if err := loadInvestmentRecords(); err != nil {
 		statusBarItem.SetText("历史记录读取失败：" + err.Error())
@@ -186,21 +199,23 @@ func main() {
 
 func buildCalculatorPage() Widget {
 	return VSplitter{
-		HandleWidth:   7,
+		HandleWidth:   8,
 		StretchFactor: 1,
+		Background:    windowBackground,
 		Children: []Widget{
 			Composite{
 				StretchFactor: 2,
 				Layout: VBox{
 					MarginsZero: true,
-					Spacing:     8,
+					Spacing:     10,
 				},
 				Children: []Widget{
 					Composite{
 						StretchFactor: 1,
+						Background:    windowBackground,
 						Layout: HBox{
 							MarginsZero: true,
-							Spacing:     8,
+							Spacing:     10,
 						},
 						Children: []Widget{
 							buildOverviewPanel(),
@@ -210,22 +225,47 @@ func buildCalculatorPage() Widget {
 					buildActionBar(),
 				},
 			},
-			GroupBox{
-				Title:         "再平衡建议",
+			Composite{
 				MinSize:       Size{Height: 160},
 				StretchFactor: 3,
 				Background:    panelBackground,
+				Border:        true,
 				Layout: VBox{
-					Margins: Margins{Left: 10, Top: 12, Right: 10, Bottom: 10},
+					Margins: Margins{Left: 14, Top: 12, Right: 14, Bottom: 14},
+					Spacing: 8,
 				},
 				Children: []Widget{
+					Composite{
+						Background: panelBackground,
+						Layout: HBox{
+							MarginsZero: true,
+							Spacing:     8,
+						},
+						Children: []Widget{
+							Label{
+								Text:      "再平衡建议",
+								TextColor: defaultTextColor,
+								Font:      Font{Family: "Microsoft YaHei UI", PointSize: 12, Bold: true},
+							},
+							Label{
+								Text:      "买入金额、预计仓位和偏离提醒",
+								TextColor: mutedTextColor,
+							},
+							HSpacer{},
+							Label{
+								Text:      "结果区",
+								TextColor: accentColor,
+								Font:      Font{Family: "Microsoft YaHei UI", PointSize: 9, Bold: true},
+							},
+						},
+					},
 					TextEdit{
 						AssignTo:      &resultEdit,
 						ReadOnly:      true,
 						VScroll:       true,
 						Background:    resultBackground,
 						TextColor:     defaultTextColor,
-						Font:          Font{Family: "Microsoft YaHei UI", PointSize: 10},
+						Font:          Font{Family: "NSimSun", PointSize: 10},
 						StretchFactor: 1,
 						Text:          initialResultText(),
 					},
@@ -237,42 +277,67 @@ func buildCalculatorPage() Widget {
 
 func buildHeader() Widget {
 	return Composite{
-		MinSize:    Size{Height: 54},
+		MinSize:    Size{Height: 70},
 		Background: headerBackground,
+		Border:     true,
 		Layout: HBox{
-			Margins: Margins{Left: 18, Top: 9, Right: 18, Bottom: 9},
-			Spacing: 14,
+			Margins: Margins{Left: 18, Top: 12, Right: 18, Bottom: 12},
+			Spacing: 16,
 		},
 		Children: []Widget{
 			Label{
-				Text:      "投资组合再平衡助手",
-				Font:      Font{Family: "Microsoft YaHei UI", PointSize: 15, Bold: true},
-				TextColor: walk.RGB(255, 255, 255),
+				Text:      "▰",
+				Font:      Font{Family: "Microsoft YaHei UI", PointSize: 19, Bold: true},
+				TextColor: accentColor,
+				MinSize:   Size{Width: 24},
 			},
-			Label{
-				Text:      "按买入后的组合总额计算目标缺口，让所有资产尽量靠近设定仓位。",
-				TextColor: walk.RGB(213, 224, 240),
+			Composite{
+				Background: headerBackground,
+				Layout: VBox{
+					MarginsZero: true,
+					Spacing:     2,
+				},
+				Children: []Widget{
+					Label{
+						Text:      "组合再平衡工作台",
+						Font:      Font{Family: "Microsoft YaHei UI", PointSize: 16, Bold: true},
+						TextColor: defaultTextColor,
+					},
+					Label{
+						Text:      "面向长期定投与仓位校准：先录入资产，再计算本次买入方案。",
+						TextColor: mutedTextColor,
+					},
+				},
 			},
 			HSpacer{},
+			Label{
+				Text:      "Windows 本地版",
+				TextColor: secondaryColor,
+				Font:      Font{Family: "Microsoft YaHei UI", PointSize: 9, Bold: true},
+			},
 		},
 	}
 }
 
 func buildOverviewPanel() Widget {
-	return GroupBox{
-		Title:      "本次投入",
+	return Composite{
 		MinSize:    Size{Width: 265, Height: 205},
-		MaxSize:    Size{Width: 290, Height: 1000},
+		MaxSize:    Size{Width: 310, Height: 1000},
 		Background: panelBackground,
+		Border:     true,
 		Layout: VBox{
-			Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 10},
-			Spacing: 8,
+			Margins: Margins{Left: 14, Top: 14, Right: 14, Bottom: 14},
+			Spacing: 10,
 		},
 		Children: []Widget{
 			Label{
-				Text:      "本次可投入金额",
+				Text:      "本次投入",
 				TextColor: defaultTextColor,
-				Font:      Font{Family: "Microsoft YaHei UI", PointSize: 9, Bold: true},
+				Font:      Font{Family: "Microsoft YaHei UI", PointSize: 12, Bold: true},
+			},
+			Label{
+				Text:      "本次可投入金额",
+				TextColor: mutedTextColor,
 			},
 			NumberEdit{
 				AssignTo:           &investAmountEdit,
@@ -284,19 +349,26 @@ func buildOverviewPanel() Widget {
 				SpinButtonsVisible: false,
 				Suffix:             " 元",
 				ToolTipText:        "本次准备投入组合的新增资金。",
+				Background:         fieldBackground,
+				TextColor:          defaultTextColor,
+				Font:               Font{Family: "Microsoft YaHei UI", PointSize: 13, Bold: true},
+				MinSize:            Size{Height: 34},
+				OnValueChanged: func() {
+					saveCurrentPortfolioFromClassic()
+				},
 			},
-			VSpacer{Size: 4},
+			VSpacer{Size: 2},
 			Label{
-				Text:      "资产汇总",
-				TextColor: mutedTextColor,
-				Font:      Font{Family: "Microsoft YaHei UI", PointSize: 9, Bold: true},
+				Text:      "资产概览",
+				TextColor: defaultTextColor,
+				Font:      Font{Family: "Microsoft YaHei UI", PointSize: 10, Bold: true},
 			},
 			Label{
 				AssignTo:  &assetSummaryLabel,
-				Text:      "资产数量：0 项\r\n目标合计：0.00%\r\n当前总额：0.00 元",
+				Text:      "资产数量：0 项\r\n目标合计：0%\r\n当前总额：0 元",
 				TextColor: accentColor,
-				Font:      Font{Family: "Microsoft YaHei UI", PointSize: 10, Bold: true},
-				MinSize:   Size{Height: 64},
+				Font:      Font{Family: "Microsoft YaHei UI", PointSize: 11, Bold: true},
+				MinSize:   Size{Height: 78},
 			},
 			VSpacer{},
 		},
@@ -304,22 +376,33 @@ func buildOverviewPanel() Widget {
 }
 
 func buildAssetPanel() Widget {
-	return GroupBox{
-		Title:         "资产条目",
+	return Composite{
 		MinSize:       Size{Height: 205},
 		StretchFactor: 4,
 		Background:    panelBackground,
+		Border:        true,
 		Layout: VBox{
-			Margins: Margins{Left: 10, Top: 12, Right: 10, Bottom: 9},
-			Spacing: 6,
+			Margins: Margins{Left: 14, Top: 14, Right: 14, Bottom: 12},
+			Spacing: 8,
 		},
 		Children: []Widget{
 			Composite{
+				Background: panelBackground,
 				Layout: HBox{
 					MarginsZero: true,
 					Spacing:     8,
 				},
 				Children: []Widget{
+					Label{
+						Text:      "资产条目",
+						TextColor: defaultTextColor,
+						Font:      Font{Family: "Microsoft YaHei UI", PointSize: 12, Bold: true},
+					},
+					Label{
+						Text:      "双击行可编辑",
+						TextColor: mutedTextColor,
+					},
+					HSpacer{},
 					PushButton{
 						Text:    "＋ 添加资产",
 						MinSize: Size{Width: 112, Height: 28},
@@ -329,28 +412,24 @@ func buildAssetPanel() Widget {
 						},
 					},
 					PushButton{
-						Text:    "删除选中",
-						MinSize: Size{Width: 100, Height: 28},
+						Text:    "删除",
+						MinSize: Size{Width: 76, Height: 28},
 						OnClicked: func() {
 							removeSelectedAsset()
 						},
-					},
-					HSpacer{},
-					Label{
-						Text:      "双击任意一行，在下方直接编辑",
-						TextColor: mutedTextColor,
 					},
 				},
 			},
 			TableView{
 				AssignTo:                    &assetTable,
 				Model:                       assetModel,
+				Background:                  tableBackground,
 				AlternatingRowBG:            true,
 				LastColumnStretched:         true,
 				NotSortableByHeaderClick:    true,
 				SelectionHiddenWithoutFocus: false,
-				CustomRowHeight:             26,
-				MinSize:                     Size{Height: 92},
+				CustomRowHeight:             30,
+				MinSize:                     Size{Height: 118},
 				Columns: []TableViewColumn{
 					{Title: "#", Width: 44, Alignment: AlignCenter},
 					{Title: "资产名称", Width: 260},
@@ -358,6 +437,7 @@ func buildAssetPanel() Widget {
 					{Title: "当前持有金额", Width: 190, Alignment: AlignFar},
 					{Title: "自动计算当前仓位", Width: 190, Alignment: AlignFar},
 				},
+				StyleCell: styleAssetTableCell,
 				OnItemActivated: func() {
 					editSelectedAsset()
 				},
@@ -367,15 +447,76 @@ func buildAssetPanel() Widget {
 	}
 }
 
+func styleAssetTableCell(style *walk.CellStyle) {
+	styleDarkTableCell(style, currentTableIndex(assetTable))
+	row := style.Row()
+	if row < 0 || row >= len(assetModel.items) {
+		return
+	}
+	item := assetModel.items[row]
+	if isBlankAsset(item) {
+		style.TextColor = mutedTextColor
+		return
+	}
+	switch style.Col() {
+	case 2, 4:
+		style.TextColor = accentColor
+	case 3:
+		style.TextColor = secondaryColor
+	}
+}
+
+func styleDarkTableCell(style *walk.CellStyle, currentIndex int) {
+	row := style.Row()
+	if row < 0 {
+		return
+	}
+	if row == currentIndex {
+		style.BackgroundColor = tableSelectColor
+		style.TextColor = defaultTextColor
+		return
+	}
+	if row%2 == 0 {
+		style.BackgroundColor = tableRowColor
+	} else {
+		style.BackgroundColor = tableAltRowColor
+	}
+	style.TextColor = defaultTextColor
+}
+
+func currentTableIndex(table *walk.TableView) int {
+	if table == nil {
+		return -1
+	}
+	return table.CurrentIndex()
+}
+
+func statusTextColor(status string) walk.Color {
+	switch {
+	case strings.Contains(status, "严重超配"):
+		return dangerColor
+	case strings.Contains(status, "严重低配"):
+		return warningColor
+	case strings.Contains(status, "略高"):
+		return warningColor
+	case strings.Contains(status, "略低"):
+		return secondaryColor
+	case strings.Contains(status, "接近"):
+		return accentColor
+	default:
+		return defaultTextColor
+	}
+}
+
 func buildInlineEditor() Widget {
 	return Composite{
 		AssignTo:   &inlineEditor,
 		Visible:    false,
-		Background: resultBackground,
+		Background: fieldBackground,
 		Border:     true,
 		Layout: HBox{
-			Margins: Margins{Left: 8, Top: 6, Right: 8, Bottom: 6},
-			Spacing: 7,
+			Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8},
+			Spacing: 8,
 		},
 		Children: []Widget{
 			Label{
@@ -390,6 +531,8 @@ func buildInlineEditor() Widget {
 				CueBanner:     "资产名称",
 				MinSize:       Size{Width: 210},
 				StretchFactor: 2,
+				Background:    resultBackground,
+				TextColor:     defaultTextColor,
 				OnTextChanged: syncInlineEditor,
 			},
 			NumberEdit{
@@ -401,6 +544,8 @@ func buildInlineEditor() Widget {
 				SpinButtonsVisible: false,
 				Suffix:             " % 目标",
 				MinSize:            Size{Width: 135},
+				Background:         resultBackground,
+				TextColor:          defaultTextColor,
 				OnValueChanged:     syncInlineEditor,
 			},
 			NumberEdit{
@@ -410,10 +555,15 @@ func buildInlineEditor() Widget {
 				MinValue:           0,
 				MaxValue:           1_000_000_000,
 				SpinButtonsVisible: false,
-				Suffix:             " 元 持有",
 				MinSize:            Size{Width: 185},
 				StretchFactor:      1,
+				Background:         resultBackground,
+				TextColor:          defaultTextColor,
 				OnValueChanged:     syncInlineEditor,
+			},
+			Label{
+				Text:      "元",
+				TextColor: mutedTextColor,
 			},
 			PushButton{
 				Text:    "完成",
@@ -436,15 +586,16 @@ func buildInlineEditor() Widget {
 func buildActionBar() Widget {
 	return Composite{
 		Background: panelBackground,
+		Border:     true,
 		Layout: HBox{
-			Margins: Margins{Left: 10, Top: 6, Right: 10, Bottom: 6},
-			Spacing: 8,
+			Margins: Margins{Left: 14, Top: 10, Right: 14, Bottom: 10},
+			Spacing: 10,
 		},
 		Children: []Widget{
 			PushButton{
-				Text:    "计算再平衡建议",
-				MinSize: Size{Width: 165, Height: 30},
-				Font:    Font{Family: "Microsoft YaHei UI", PointSize: 10, Bold: true},
+				Text:    "计算建议",
+				MinSize: Size{Width: 118, Height: 30},
+				Font:    Font{Family: "Microsoft YaHei UI", PointSize: 11, Bold: true},
 				OnClicked: func() {
 					result, err := calculateFromForm()
 					if err != nil {
@@ -456,10 +607,14 @@ func buildActionBar() Widget {
 					statusBarItem.SetText("计算完成：所有目标金额均基于买入后的组合总额")
 				},
 			},
+			Label{
+				Text:      "目标合计需为 100%，计算结果可直接归档到历史记录。",
+				TextColor: mutedTextColor,
+			},
 			HSpacer{},
 			PushButton{
-				Text:    "保存当次信息到投资记录",
-				MinSize: Size{Width: 190, Height: 28},
+				Text:    "保存归档",
+				MinSize: Size{Width: 118, Height: 30},
 				OnClicked: func() {
 					if err := archiveCurrentInvestment(); err != nil {
 						walk.MsgBox(mainWindow, "保存失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
@@ -470,13 +625,15 @@ func buildActionBar() Widget {
 			},
 			PushButton{
 				Text:    "清空资产",
-				MinSize: Size{Width: 100, Height: 28},
+				MinSize: Size{Width: 96, Height: 30},
 				OnClicked: func() {
 					closeInlineEditor()
 					assetModel.SetItems(nil)
 					refreshAssetSummary()
 					resultEdit.SetText(initialResultText())
-					statusBarItem.SetText("资产列表已清空")
+					if saveCurrentPortfolioFromClassic() {
+						statusBarItem.SetText("资产列表已清空")
+					}
 				},
 			},
 		},
@@ -494,8 +651,11 @@ func addAsset() {
 	_ = assetTable.SetCurrentIndex(index)
 	refreshAssetSummary()
 	resultEdit.SetText(initialResultText())
+	saved := saveCurrentPortfolioFromClassic()
 	beginInlineEdit(index, true)
-	statusBarItem.SetText("已添加空白行，请在资产区下方直接填写")
+	if saved {
+		statusBarItem.SetText("已添加空白行，请在资产区下方直接填写")
+	}
 }
 
 func editSelectedAsset() {
@@ -521,7 +681,9 @@ func removeSelectedAsset() {
 		}
 		assetModel.Remove(index)
 		refreshAssetSummary()
-		statusBarItem.SetText("已删除空白资产行")
+		if saveCurrentPortfolioFromClassic() {
+			statusBarItem.SetText("已删除空白资产行")
+		}
 		return
 	}
 	if walk.MsgBox(
@@ -539,7 +701,9 @@ func removeSelectedAsset() {
 	assetModel.Remove(index)
 	refreshAssetSummary()
 	resultEdit.SetText(initialResultText())
-	statusBarItem.SetText("已删除资产：" + name)
+	if saveCurrentPortfolioFromClassic() {
+		statusBarItem.SetText("已删除资产：" + name)
+	}
 }
 
 func beginInlineEdit(index int, isNew bool) {
@@ -574,6 +738,7 @@ func syncInlineEditor() {
 	}
 	refreshAssetSummary()
 	resultEdit.SetText(initialResultText())
+	saveCurrentPortfolioFromClassic()
 }
 
 func finishInlineEdit() {
@@ -607,7 +772,70 @@ func cancelInlineEdit() {
 	closeInlineEditor()
 	refreshAssetSummary()
 	resultEdit.SetText(initialResultText())
+	saveCurrentPortfolioFromClassic()
 	statusBarItem.SetText("已撤销本次编辑")
+}
+
+func loadPortfolioIntoClassic() {
+	if investAmountEdit == nil {
+		return
+	}
+	loadingPortfolio = true
+	defer func() {
+		loadingPortfolio = false
+	}()
+
+	investAmount, assets, err := loadPortfolioConfig(5000)
+	if err != nil {
+		statusBarItem.SetText("当前资产配置读取失败：" + err.Error())
+		investAmount = 5000
+	}
+	_ = investAmountEdit.SetValue(investAmount)
+	assetModel.SetItems(assets)
+	if len(assets) > 0 && assetTable != nil {
+		_ = assetTable.SetCurrentIndex(0)
+	}
+}
+
+func saveCurrentPortfolioFromClassic() bool {
+	if loadingPortfolio || investAmountEdit == nil {
+		return true
+	}
+	if err := savePortfolioConfig(investAmountEdit.Value(), assetModel.ItemsCopy()); err != nil {
+		statusBarItem.SetText("当前资产配置保存失败：" + err.Error())
+		return false
+	}
+	return true
+}
+
+func loadSelectedHistoryToCalculator() {
+	if selectedHistoryIndex < 0 || selectedHistoryIndex >= len(investmentRecords) {
+		statusBarItem.SetText("请先选择要读取的历史记录")
+		return
+	}
+	record := cloneInvestmentRecord(selectedHistoryDraft)
+	if record.ID == "" {
+		record = cloneInvestmentRecord(investmentRecords[selectedHistoryIndex])
+	}
+	recalculateInvestmentRecord(&record)
+	assets := portfolioAssetsFromHistory(record)
+	if len(assets) == 0 {
+		statusBarItem.SetText("该历史记录没有可读取的资产条目")
+		return
+	}
+
+	closeInlineEditor()
+	assetModel.SetItems(assets)
+	_ = assetTable.SetCurrentIndex(0)
+	refreshAssetSummary()
+	resultEdit.SetText(initialResultText())
+	saved := saveCurrentPortfolioFromClassic()
+	if mainTabs != nil {
+		_ = mainTabs.SetCurrentIndex(0)
+	}
+	if saved {
+		statusBarItem.SetText("已读取历史记录，当前资产金额使用买入后金额")
+	}
 }
 
 func closeInlineEditor() {
@@ -655,9 +883,9 @@ func refreshAssetSummary() {
 		return
 	}
 	assetSummaryLabel.SetText(fmt.Sprintf(
-		"资产数量：%d 项\r\n目标合计：%.2f%%\r\n当前总额：%s 元",
+		"资产数量：%d 项\r\n目标合计：%s\r\n当前总额：%s 元",
 		len(assetModel.items),
-		targetPctSum(assetModel.items),
+		formatPercent(targetPctSum(assetModel.items)),
 		formatMoney(currentAmountSum(assetModel.items)),
 	))
 	assetModel.RefreshAll()
@@ -718,8 +946,8 @@ func validateDraftAssets(items []AssetInput) error {
 }
 
 func initialResultText() string {
-	return "点击“添加资产”会直接插入空白行；双击任意资产行，可在表格下方直接修改。\r\n\r\n" +
-		"至少需要两项资产，且目标仓位合计为 100%。当前总额和当前仓位由持有金额自动计算。"
+	return "先点击“添加资产”录入名称、目标仓位和当前持有金额。\r\n\r\n" +
+		"至少需要两项资产，且目标仓位合计为 100%。当前总额和当前仓位会根据持有金额自动更新。"
 }
 
 func showStartupError(err error) {

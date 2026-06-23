@@ -89,13 +89,13 @@ func (m *HistoryAssetModel) Value(row, col int) interface{} {
 	case 1:
 		return formatPercent(asset.TargetPct)
 	case 2:
-		return formatMoney(asset.BeforeAmount) + " 元"
+		return formatMoney(asset.BeforeAmount)
 	case 3:
 		return formatPercent(asset.BeforePct)
 	case 4:
-		return formatMoney(asset.BuyAmount) + " 元"
+		return formatMoney(asset.BuyAmount)
 	case 5:
-		return formatMoney(asset.AfterAmount) + " 元"
+		return formatMoney(asset.AfterAmount)
 	case 6:
 		return formatPercent(asset.AfterPct)
 	case 7:
@@ -129,39 +129,47 @@ var (
 
 func buildHistoryPage() Widget {
 	return Composite{
+		Background: windowBackground,
 		Layout: HBox{
 			MarginsZero: true,
-			Spacing:     8,
+			Spacing:     10,
 		},
 		Children: []Widget{
-			GroupBox{
-				Title:      "历史投资记录",
+			Composite{
 				MinSize:    Size{Width: 350},
-				MaxSize:    Size{Width: 390, Height: 2000},
+				MaxSize:    Size{Width: 400, Height: 2000},
 				Background: panelBackground,
+				Border:     true,
 				Layout: VBox{
-					Margins: Margins{Left: 8, Top: 10, Right: 8, Bottom: 8},
-					Spacing: 6,
+					Margins: Margins{Left: 14, Top: 14, Right: 14, Bottom: 12},
+					Spacing: 8,
 				},
 				Children: []Widget{
 					Label{
-						Text:      "单击或双击记录，在右侧查看和修改",
+						Text:      "历史投资记录",
+						TextColor: defaultTextColor,
+						Font:      Font{Family: "Microsoft YaHei UI", PointSize: 12, Bold: true},
+					},
+					Label{
+						Text:      "选择一条记录，在右侧查看、调整或删除。",
 						TextColor: mutedTextColor,
 					},
 					TableView{
 						AssignTo:                    &historyTable,
 						Model:                       historyListModel,
+						Background:                  tableBackground,
 						AlternatingRowBG:            true,
 						SelectionHiddenWithoutFocus: false,
 						NotSortableByHeaderClick:    true,
 						LastColumnStretched:         true,
-						CustomRowHeight:             28,
+						CustomRowHeight:             30,
 						StretchFactor:               1,
 						Columns: []TableViewColumn{
 							{Title: "归档时间", Width: 145},
 							{Title: "投资总额", Width: 105, Alignment: AlignFar},
 							{Title: "当次投入", Width: 100, Alignment: AlignFar},
 						},
+						StyleCell:             styleHistoryListCell,
 						OnCurrentIndexChanged: showSelectedHistoryRecord,
 						OnItemActivated:       showSelectedHistoryRecord,
 					},
@@ -172,18 +180,19 @@ func buildHistoryPage() Widget {
 						Font:      Font{Family: "Microsoft YaHei UI", PointSize: 8},
 					},
 					Composite{
-						Layout: HBox{MarginsZero: true, Spacing: 8},
+						Background: panelBackground,
+						Layout:     HBox{MarginsZero: true, Spacing: 8},
 						Children: []Widget{
 							PushButton{
 								Text:    "导出",
-								MinSize: Size{Width: 92, Height: 28},
+								MinSize: Size{Width: 96, Height: 30},
 								OnClicked: func() {
 									exportInvestmentRecords()
 								},
 							},
 							PushButton{
 								Text:    "导入",
-								MinSize: Size{Width: 92, Height: 28},
+								MinSize: Size{Width: 96, Height: 30},
 								OnClicked: func() {
 									importInvestmentRecords()
 								},
@@ -193,55 +202,89 @@ func buildHistoryPage() Widget {
 					},
 				},
 			},
-			GroupBox{
-				Title:         "投资记录详情",
+			Composite{
 				StretchFactor: 3,
 				Background:    panelBackground,
+				Border:        true,
 				Layout: VBox{
-					Margins: Margins{Left: 10, Top: 12, Right: 10, Bottom: 10},
-					Spacing: 7,
+					Margins: Margins{Left: 14, Top: 14, Right: 14, Bottom: 12},
+					Spacing: 9,
 				},
 				Children: []Widget{
 					Composite{
-						AssignTo: &historyDetailPanel,
-						Enabled:  false,
+						Background: panelBackground,
+						Layout: HBox{
+							MarginsZero: true,
+							Spacing:     8,
+						},
+						Children: []Widget{
+							Label{
+								Text:      "投资记录详情",
+								TextColor: defaultTextColor,
+								Font:      Font{Family: "Microsoft YaHei UI", PointSize: 12, Bold: true},
+							},
+							Label{
+								Text:      "资产明细、备注和当次投入可直接维护",
+								TextColor: mutedTextColor,
+							},
+							HSpacer{},
+						},
+					},
+					Composite{
+						AssignTo:   &historyDetailPanel,
+						Enabled:    false,
+						Background: panelBackground,
 						Layout: VBox{
 							MarginsZero: true,
-							Spacing:     7,
+							Spacing:     9,
 						},
 						Children: []Widget{
 							Composite{
+								Background: panelBackground,
 								Layout: Grid{
 									Columns:     4,
 									MarginsZero: true,
-									Spacing:     7,
+									Spacing:     8,
 								},
 								Children: []Widget{
-									Label{Text: "归档时间"},
+									Label{Text: "归档时间", TextColor: mutedTextColor},
 									LineEdit{
-										AssignTo:    &historyArchiveEdit,
-										ToolTipText: "格式：2026-06-18 15:30:00",
-										MinSize:     Size{Width: 190},
-										MaxSize:     Size{Width: 220, Height: 100},
+										AssignTo:          &historyArchiveEdit,
+										ToolTipText:       "格式：2026-06-18 15:30:00",
+										MinSize:           Size{Width: 190},
+										MaxSize:           Size{Width: 220, Height: 100},
+										Background:        fieldBackground,
+										TextColor:         defaultTextColor,
+										OnEditingFinished: syncHistoryRecordFields,
 									},
-									Label{Text: "当次投入"},
-									NumberEdit{
-										AssignTo:           &historyInvestEdit,
-										Decimals:           2,
-										Increment:          500,
-										MinValue:           0,
-										MaxValue:           1_000_000_000,
-										SpinButtonsVisible: false,
-										Suffix:             " 元",
-										MinSize:            Size{Width: 150},
-										MaxSize:            Size{Width: 190, Height: 100},
-										OnValueChanged:     syncHistoryRecordFields,
+									Label{Text: "当次投入", TextColor: mutedTextColor},
+									Composite{
+										Background: panelBackground,
+										Layout:     HBox{MarginsZero: true, Spacing: 6},
+										Children: []Widget{
+											NumberEdit{
+												AssignTo:           &historyInvestEdit,
+												Decimals:           2,
+												Increment:          500,
+												MinValue:           0,
+												MaxValue:           1_000_000_000,
+												SpinButtonsVisible: false,
+												MinSize:            Size{Width: 130},
+												MaxSize:            Size{Width: 160, Height: 100},
+												Background:         fieldBackground,
+												TextColor:          defaultTextColor,
+												OnValueChanged:     syncHistoryRecordFields,
+											},
+											Label{Text: "元", TextColor: mutedTextColor},
+										},
 									},
-									Label{Text: "备注"},
+									Label{Text: "备注", TextColor: mutedTextColor},
 									LineEdit{
 										AssignTo:      &historyNotesEdit,
 										ColumnSpan:    3,
 										CueBanner:     "可填写本次投资说明",
+										Background:    fieldBackground,
+										TextColor:     defaultTextColor,
 										OnTextChanged: syncHistoryRecordFields,
 									},
 								},
@@ -255,39 +298,43 @@ func buildHistoryPage() Widget {
 							TableView{
 								AssignTo:                    &historyAssetTable,
 								Model:                       historyAssetModel,
+								Background:                  tableBackground,
 								AlternatingRowBG:            true,
 								SelectionHiddenWithoutFocus: false,
 								NotSortableByHeaderClick:    true,
 								LastColumnStretched:         true,
-								CustomRowHeight:             27,
+								CustomRowHeight:             30,
 								StretchFactor:               1,
 								Columns: []TableViewColumn{
 									{Title: "资产", Width: 150},
-									{Title: "目标", Width: 70, Alignment: AlignFar},
-									{Title: "买入前金额", Width: 115, Alignment: AlignFar},
-									{Title: "买入前仓位", Width: 90, Alignment: AlignFar},
-									{Title: "买入金额", Width: 105, Alignment: AlignFar},
-									{Title: "买入后金额", Width: 115, Alignment: AlignFar},
-									{Title: "买入后仓位", Width: 90, Alignment: AlignFar},
+									{Title: "目标", Width: 70},
+									{Title: "买入前金额", Width: 115},
+									{Title: "买入前仓位", Width: 90},
+									{Title: "买入金额", Width: 105},
+									{Title: "买入后金额", Width: 115},
+									{Title: "买入后仓位", Width: 90},
 									{Title: "状态", Width: 110},
 								},
+								StyleCell:             styleHistoryAssetCell,
 								OnCurrentIndexChanged: loadSelectedHistoryAsset,
 								OnItemActivated:       loadSelectedHistoryAsset,
 							},
 							Composite{
-								Background: resultBackground,
+								Background: fieldBackground,
 								Border:     true,
 								Layout: HBox{
-									Margins: Margins{Left: 8, Top: 6, Right: 8, Bottom: 6},
-									Spacing: 7,
+									Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8},
+									Spacing: 8,
 								},
 								Children: []Widget{
-									Label{Text: "修改资产", TextColor: accentColor},
+									Label{Text: "修改资产", TextColor: accentColor, Font: Font{Family: "Microsoft YaHei UI", PointSize: 9, Bold: true}},
 									LineEdit{
 										AssignTo:      &historyAssetNameEdit,
 										CueBanner:     "资产名称",
 										MinSize:       Size{Width: 150},
 										StretchFactor: 2,
+										Background:    resultBackground,
+										TextColor:     defaultTextColor,
 										OnTextChanged: syncHistoryAssetEditor,
 									},
 									NumberEdit{
@@ -298,6 +345,8 @@ func buildHistoryPage() Widget {
 										SpinButtonsVisible: false,
 										Suffix:             " % 目标",
 										MinSize:            Size{Width: 125},
+										Background:         resultBackground,
+										TextColor:          defaultTextColor,
 										OnValueChanged:     syncHistoryAssetEditor,
 									},
 									NumberEdit{
@@ -308,6 +357,8 @@ func buildHistoryPage() Widget {
 										SpinButtonsVisible: false,
 										Suffix:             " 元 买入前",
 										MinSize:            Size{Width: 165},
+										Background:         resultBackground,
+										TextColor:          defaultTextColor,
 										OnValueChanged:     syncHistoryAssetEditor,
 									},
 									NumberEdit{
@@ -318,34 +369,33 @@ func buildHistoryPage() Widget {
 										SpinButtonsVisible: false,
 										Suffix:             " 元 买入",
 										MinSize:            Size{Width: 150},
+										Background:         resultBackground,
+										TextColor:          defaultTextColor,
 										OnValueChanged:     syncHistoryAssetEditor,
 									},
 								},
 							},
 							Composite{
-								Layout: HBox{MarginsZero: true, Spacing: 8},
+								Background: panelBackground,
+								Layout:     HBox{MarginsZero: true, Spacing: 8},
 								Children: []Widget{
 									PushButton{
-										Text:    "保存修改",
-										MinSize: Size{Width: 110, Height: 30},
+										Text:    "读取记录",
+										MinSize: Size{Width: 112, Height: 32},
 										OnClicked: func() {
-											if err := saveHistoryChanges(); err != nil {
-												walk.MsgBox(mainWindow, "保存失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-												return
-											}
-											statusBarItem.SetText("历史投资记录已更新")
+											loadSelectedHistoryToCalculator()
 										},
 									},
 									PushButton{
 										Text:    "删除该记录",
-										MinSize: Size{Width: 110, Height: 30},
+										MinSize: Size{Width: 112, Height: 32},
 										OnClicked: func() {
 											deleteSelectedHistoryRecord()
 										},
 									},
 									HSpacer{},
 									Label{
-										Text:      "修改资产后，金额、仓位与提醒会自动重算",
+										Text:      "修改后会自动保存，金额、仓位与提醒会自动重算",
 										TextColor: mutedTextColor,
 									},
 								},
@@ -355,6 +405,37 @@ func buildHistoryPage() Widget {
 				},
 			},
 		},
+	}
+}
+
+func styleHistoryListCell(style *walk.CellStyle) {
+	styleDarkTableCell(style, currentTableIndex(historyTable))
+	switch style.Col() {
+	case 1:
+		style.TextColor = accentColor
+	case 2:
+		style.TextColor = secondaryColor
+	}
+}
+
+func styleHistoryAssetCell(style *walk.CellStyle) {
+	styleDarkTableCell(style, currentTableIndex(historyAssetTable))
+	row := style.Row()
+	if row < 0 || row >= len(selectedHistoryDraft.Assets) {
+		return
+	}
+	asset := selectedHistoryDraft.Assets[row]
+	switch style.Col() {
+	case 1, 6:
+		style.TextColor = accentColor
+	case 4:
+		if asset.BuyAmount > 0 {
+			style.TextColor = accentColor
+		} else {
+			style.TextColor = mutedTextColor
+		}
+	case 7:
+		style.TextColor = statusTextColor(asset.Status)
 	}
 }
 
@@ -407,11 +488,7 @@ func recordFromResult(result *PortfolioResult) InvestmentRecord {
 }
 
 func recordsFilePath() (string, error) {
-	executable, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("无法确定程序目录：%w", err)
-	}
-	return filepath.Join(filepath.Dir(executable), recordsFileName), nil
+	return appDataFilePath(recordsFileName)
 }
 
 func loadInvestmentRecords() error {
@@ -669,17 +746,20 @@ func syncHistoryAssetEditor() {
 	historyAssetModel.PublishRowsReset()
 	_ = historyAssetTable.SetCurrentIndex(selectedAssetIndex)
 	refreshHistorySummary()
+	autoSaveHistoryChanges()
 }
 
 func syncHistoryRecordFields() {
 	if loadingHistoryEditor || selectedHistoryIndex < 0 {
 		return
 	}
+	selectedHistoryDraft.ArchivedAt = strings.TrimSpace(historyArchiveEdit.Text())
 	selectedHistoryDraft.InvestAmount = historyInvestEdit.Value()
 	selectedHistoryDraft.Notes = strings.TrimSpace(historyNotesEdit.Text())
 	recalculateInvestmentRecord(&selectedHistoryDraft)
 	historyAssetModel.PublishRowsReset()
 	refreshHistorySummary()
+	autoSaveHistoryChanges()
 }
 
 func refreshHistorySummary() {
@@ -771,6 +851,14 @@ func saveHistoryChanges() error {
 	return nil
 }
 
+func autoSaveHistoryChanges() {
+	if err := saveHistoryChanges(); err != nil {
+		statusBarItem.SetText("自动保存失败：" + err.Error())
+		return
+	}
+	statusBarItem.SetText("历史投资记录已自动保存")
+}
+
 func validateInvestmentRecord(record InvestmentRecord) error {
 	if len(record.Assets) < 2 {
 		return fmt.Errorf("历史记录至少需要两项资产")
@@ -797,7 +885,7 @@ func validateInvestmentRecord(record InvestmentRecord) error {
 		targetSum += asset.TargetPct
 	}
 	if math.Abs(targetSum-100) > 0.01 {
-		return fmt.Errorf("目标仓位合计必须为 100%%，当前为 %.2f%%", targetSum)
+		return fmt.Errorf("目标仓位合计必须为 100%%，当前为 %s", formatPercent(targetSum))
 	}
 	return nil
 }

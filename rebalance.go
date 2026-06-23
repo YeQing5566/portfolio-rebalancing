@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -84,7 +85,7 @@ func CalculatePortfolio(investAmount float64, inputs []AssetInput) (*PortfolioRe
 	}
 
 	if math.Abs(targetSum-100) > 0.01 {
-		return nil, fmt.Errorf("目标仓位合计必须为 100%%，当前为 %.2f%%", targetSum)
+		return nil, fmt.Errorf("目标仓位合计必须为 100%%，当前为 %s", formatPercent(targetSum))
 	}
 
 	afterTotal := currentTotal + investAmount
@@ -125,8 +126,8 @@ func CalculatePortfolio(investAmount float64, inputs []AssetInput) (*PortfolioRe
 
 	for _, asset := range result.Assets {
 		asset.AfterPct = (asset.CurrentAmount + asset.BuyAmount) / afterTotal * 100
-		asset.IsSeverelyLow = asset.AfterPct < asset.LowLine
-		asset.IsSeverelyHigh = asset.AfterPct > asset.HighLine
+		asset.IsSeverelyLow = severelyLow(asset)
+		asset.IsSeverelyHigh = severelyHigh(asset)
 		asset.Status = allocationStatus(asset)
 		result.AllocatedCash += asset.BuyAmount
 	}
@@ -138,9 +139,9 @@ func CalculatePortfolio(investAmount float64, inputs []AssetInput) (*PortfolioRe
 
 func allocationStatus(asset *AssetResult) string {
 	switch {
-	case asset.IsSeverelyHigh:
+	case severelyHigh(asset):
 		return "严重超配提醒"
-	case asset.IsSeverelyLow:
+	case severelyLow(asset):
 		return "严重低配提醒"
 	case asset.AfterPct > asset.TargetPct+0.005:
 		return "略高于目标"
@@ -149,6 +150,14 @@ func allocationStatus(asset *AssetResult) string {
 	default:
 		return "接近目标"
 	}
+}
+
+func severelyLow(asset *AssetResult) bool {
+	return asset.AfterPct < asset.LowLine
+}
+
+func severelyHigh(asset *AssetResult) bool {
+	return asset.AfterPct > asset.HighLine
 }
 
 // allocateCash equalizes the final target-fulfillment ratio of every asset that
@@ -264,74 +273,53 @@ func fulfillmentRatio(asset *AssetResult) float64 {
 
 func FormatResult(result *PortfolioResult) string {
 	var b strings.Builder
-	b.WriteString("再平衡买入方案\r\n")
-	b.WriteString("────────────────────────────────────────\r\n")
-	b.WriteString(fmt.Sprintf("当前资产总额：%s 元\r\n", formatMoney(result.CurrentTotal)))
-	b.WriteString(fmt.Sprintf("本次可投入：  %s 元\r\n", formatMoney(result.InvestAmount)))
-	b.WriteString(fmt.Sprintf("买入后总额：  %s 元\r\n", formatMoney(result.AfterTotal)))
-	if result.RemainingCash > 0.005 {
-		b.WriteString(fmt.Sprintf("未分配现金：  %s 元\r\n", formatMoney(result.RemainingCash)))
-	}
-
-	b.WriteString("\r\n【建议买入】\r\n")
-	hasBuy := false
-	for _, asset := range result.Assets {
-		if asset.BuyAmount <= 0.005 {
-			continue
+	widths := resultTableWidths(result.Assets)
+	b.WriteString("建议买入\r\n")
+	if len(result.Assets) > 0 {
+		b.WriteString(resultTableHeader([]resultColumn{
+			{Text: "资产", Width: widths.name},
+			{Text: "买入金额", Width: widths.buyAmount},
+			{Text: "当前仓位", Width: widths.currentPct},
+			{Text: "买入后仓位", Width: widths.afterPct},
+			{Text: "目标仓位", Width: widths.targetPct},
+		}))
+		for _, asset := range result.Assets {
+			b.WriteString(resultTableRow([]resultColumn{
+				{Text: asset.Name, Width: widths.name},
+				{Text: formatMoney(asset.BuyAmount) + " 元", Width: widths.buyAmount},
+				{Text: formatPercent(asset.CurrentPct), Width: widths.currentPct},
+				{Text: formatPercent(asset.AfterPct), Width: widths.afterPct},
+				{Text: formatPercent(asset.TargetPct), Width: widths.targetPct},
+			}))
 		}
-		hasBuy = true
-		b.WriteString(fmt.Sprintf(
-			"• %-16s %12s 元｜当前 %.2f%% → 买入后 %.2f%%｜目标 %.2f%%\r\n",
-			asset.Name,
-			formatMoney(asset.BuyAmount),
-			asset.CurrentPct,
-			asset.AfterPct,
-			asset.TargetPct,
-		))
-	}
-	if !hasBuy {
-		b.WriteString("• 没有需要买入的资产，本次资金保持为现金。\r\n")
 	}
 
-	b.WriteString("\r\n【全部资产】\r\n")
-	for _, asset := range result.Assets {
-		b.WriteString(fmt.Sprintf(
-			"• %-16s 当前金额 %12s 元｜目标 %.2f%%｜当前 %.2f%%｜买入后 %.2f%%｜%s\r\n",
-			asset.Name,
-			formatMoney(asset.CurrentAmount),
-			asset.TargetPct,
-			asset.CurrentPct,
-			asset.AfterPct,
-			asset.Status,
-		))
-	}
-
-	b.WriteString("\r\n【严重偏离提醒（按预计买入后仓位判断）】\r\n")
 	hasHigh, hasLow := false, false
+	var warningLines strings.Builder
 	for _, asset := range result.Assets {
 		switch {
-		case asset.IsSeverelyHigh:
+		case severelyHigh(asset):
 			hasHigh = true
-			b.WriteString(fmt.Sprintf(
-				"• %s 买入后预计 %.2f%%，高于严重超配线 %.2f%%。\r\n",
+			warningLines.WriteString(fmt.Sprintf(
+				"• %s 买入后预计 %s，高于严重超配线 %s。\r\n",
 				asset.Name,
-				asset.AfterPct,
-				asset.HighLine,
+				formatPercent(asset.AfterPct),
+				formatPercent(asset.HighLine),
 			))
-		case asset.IsSeverelyLow:
+		case severelyLow(asset):
 			hasLow = true
-			b.WriteString(fmt.Sprintf(
-				"• %s 买入后预计 %.2f%%，低于严重低配线 %.2f%%。\r\n",
+			warningLines.WriteString(fmt.Sprintf(
+				"• %s 买入后预计 %s，低于严重低配线 %s。\r\n",
 				asset.Name,
-				asset.AfterPct,
-				asset.LowLine,
+				formatPercent(asset.AfterPct),
+				formatPercent(asset.LowLine),
 			))
 		}
 	}
 
-	if !hasHigh && !hasLow {
-		b.WriteString("• 买入后没有资产达到严重超配或严重低配提醒线。\r\n")
-	} else {
+	if hasHigh || hasLow {
+		b.WriteString("\r\n严重偏离提醒\r\n")
+		b.WriteString(warningLines.String())
 		switch {
 		case hasHigh && hasLow:
 			b.WriteString("• 可考虑卖出部分严重超配资产，并将资金调入严重低配资产；程序仅作提醒，不自动计算卖出。\r\n")
@@ -342,18 +330,107 @@ func FormatResult(result *PortfolioResult) string {
 		}
 	}
 
-	b.WriteString("\r\n【提醒线】\r\n")
-	for _, asset := range result.Assets {
-		b.WriteString(fmt.Sprintf(
-			"• %-16s 严重低配 < %.2f%%｜严重超配 > %.2f%%\r\n",
-			asset.Name,
-			asset.LowLine,
-			asset.HighLine,
-		))
-	}
-
-	b.WriteString("\r\n说明：所有目标金额都按“当前资产总额 + 本次投入”计算。即使某项资产买入前高于目标，只要它在买入后总额下仍低于目标金额，就会参与买入分配。")
 	return b.String()
+}
+
+type resultFormatWidths struct {
+	name       int
+	buyAmount  int
+	targetPct  int
+	currentPct int
+	afterPct   int
+}
+
+type resultColumn struct {
+	Text  string
+	Width int
+}
+
+func resultTableWidths(assets []*AssetResult) resultFormatWidths {
+	widths := resultFormatWidths{
+		name:       16,
+		buyAmount:  displayWidth("买入金额"),
+		targetPct:  displayWidth("目标仓位"),
+		currentPct: displayWidth("当前仓位"),
+		afterPct:   displayWidth("买入后仓位"),
+	}
+	for _, asset := range assets {
+		widths.name = maxDisplayWidth(widths.name, asset.Name)
+		widths.buyAmount = maxDisplayWidth(widths.buyAmount, formatMoney(asset.BuyAmount)+" 元")
+		widths.targetPct = maxDisplayWidth(widths.targetPct, formatPercent(asset.TargetPct))
+		widths.currentPct = maxDisplayWidth(widths.currentPct, formatPercent(asset.CurrentPct))
+		widths.afterPct = maxDisplayWidth(widths.afterPct, formatPercent(asset.AfterPct))
+	}
+	return widths
+}
+
+func resultTableHeader(columns []resultColumn) string {
+	var b strings.Builder
+	b.WriteString(resultTableRow(columns))
+	for i, column := range columns {
+		if i > 0 {
+			b.WriteString("  ")
+		}
+		b.WriteString(strings.Repeat("-", column.Width))
+	}
+	b.WriteString("\r\n")
+	return b.String()
+}
+
+func resultTableRow(columns []resultColumn) string {
+	var b strings.Builder
+	for i, column := range columns {
+		if i > 0 {
+			b.WriteString("  ")
+		}
+		b.WriteString(padRightDisplay(column.Text, column.Width))
+	}
+	b.WriteString("\r\n")
+	return b.String()
+}
+
+func padRightDisplay(text string, width int) string {
+	padding := width - displayWidth(text)
+	if padding <= 0 {
+		return text
+	}
+	return text + strings.Repeat(" ", padding)
+}
+
+func maxDisplayWidth(current int, text string) int {
+	width := displayWidth(text)
+	if width > current {
+		return width
+	}
+	return current
+}
+
+func displayWidth(text string) int {
+	width := 0
+	for _, r := range text {
+		switch {
+		case r == '\t':
+			width += 4
+		case r < 0x20:
+			continue
+		case isWideRune(r):
+			width += 2
+		default:
+			width++
+		}
+	}
+	return width
+}
+
+func isWideRune(r rune) bool {
+	return (r >= 0x1100 && r <= 0x115F) ||
+		(r >= 0x2E80 && r <= 0xA4CF) ||
+		(r >= 0xAC00 && r <= 0xD7A3) ||
+		(r >= 0xF900 && r <= 0xFAFF) ||
+		(r >= 0xFE10 && r <= 0xFE19) ||
+		(r >= 0xFE30 && r <= 0xFE6F) ||
+		(r >= 0xFF00 && r <= 0xFF60) ||
+		(r >= 0xFFE0 && r <= 0xFFE6)
 }
 
 func formatMoney(value float64) string {
@@ -361,7 +438,7 @@ func formatMoney(value float64) string {
 	if negative {
 		value = -value
 	}
-	text := fmt.Sprintf("%.2f", value)
+	text := formatFlexibleNumber(value, 2)
 	parts := strings.Split(text, ".")
 	integer := parts[0]
 	for i := len(integer) - 3; i > 0; i -= 3 {
@@ -370,11 +447,29 @@ func formatMoney(value float64) string {
 	if negative {
 		integer = "-" + integer
 	}
+	if len(parts) == 1 {
+		return integer
+	}
 	return integer + "." + parts[1]
 }
 
 func formatPercent(value float64) string {
-	return fmt.Sprintf("%.2f%%", value)
+	return formatFlexibleNumber(value, 2) + "%"
+}
+
+func formatFlexibleNumber(value float64, decimals int) string {
+	if math.Abs(value) < moneyEpsilon {
+		value = 0
+	}
+	text := strconv.FormatFloat(value, 'f', decimals, 64)
+	if strings.Contains(text, ".") {
+		text = strings.TrimRight(text, "0")
+		text = strings.TrimRight(text, ".")
+	}
+	if text == "-0" {
+		return "0"
+	}
+	return text
 }
 
 func roundMoney(value float64) float64 {
