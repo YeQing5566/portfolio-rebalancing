@@ -12,6 +12,7 @@ import (
 const (
 	portfolioConfigFileName    = "portfolio_config.json"
 	portfolioConfigFileVersion = 2
+	appDataDirName             = "PortfolioRebalancing"
 )
 
 type portfolioConfigFile struct {
@@ -51,11 +52,26 @@ func (f flexibleFloat) MarshalJSON() ([]byte, error) {
 }
 
 func appDataFilePath(fileName string) (string, error) {
-	executable, err := os.Executable()
+	dir, err := portfolioAppDataDir()
 	if err != nil {
-		return "", fmt.Errorf("无法确定程序目录：%w", err)
+		return "", err
 	}
-	return filepath.Join(filepath.Dir(executable), fileName), nil
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("创建数据目录失败：%w", err)
+	}
+	return filepath.Join(dir, fileName), nil
+}
+
+func portfolioAppDataDir() (string, error) {
+	base := strings.TrimSpace(os.Getenv("APPDATA"))
+	if base == "" {
+		var err error
+		base, err = os.UserConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("无法确定 APPDATA 目录：%w", err)
+		}
+	}
+	return filepath.Join(base, appDataDirName), nil
 }
 
 func portfolioConfigPath() (string, error) {
