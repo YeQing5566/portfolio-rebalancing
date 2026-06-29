@@ -5,22 +5,22 @@
 ## 功能
 
 - 自定义投资组合，及各资产目标仓位
-- 根据输入的资产对应当前金额自动计算当前仓位
-- 根据当前需投入金额和目标仓位，计算各资产再平衡投入金额
-- 支持保存当前的仓位信息和计算出的再平衡策略到本地，并展示在历史投资记录界面
+- 输入持仓金额、预估投入金额、目标仓位，自动计算各资产再平衡投入金额
+- 支持保存此次的买入前后数据作为历史投资记录到本地
 - 支持修改、导入导出历史投资记录
-- 支持查看历史各资产趋势，基于月度数据，每月仅保留最新记录
+- 支持查看历史各资产趋势
+- 支持通过历史买入数据测算收益率、年化收益率（考虑定投的多次买入情况）
 
 ## 策略
 
-- 基于目标仓位、当前仓位、投入总金额，自动计算各资产买入金额；
-- 优先通过买入补足低配资产，若买入后仍出现严重低配（低于0.75倍目标仓位）或严重高配（高于1.25倍目标仓位），将高亮提醒，用户可考虑卖出，或者多次通过增量资金再平衡
+- 优先通过新增资金买入补足低配资产，若买入后仍出现严重低配（低于0.75倍目标仓位）或严重高配（高于1.25倍目标仓位），将高亮提醒，用户可考虑卖出，或者多次通过增量资金再平衡
 
 ## 界面
 
-<img width="1357" height="855" alt="image" src="https://github.com/user-attachments/assets/c6fb5226-8e19-4876-9c0a-580d580fd369" />
-<img width="1359" height="859" alt="image" src="https://github.com/user-attachments/assets/3ba1cf1b-f848-4624-998f-559fb0a2da3d" />
+<img width="1359" height="858" alt="image" src="https://github.com/user-attachments/assets/c6fb5226-8e19-4876-9c0a-580d580fd369" />
+<img width="1359" height="858" alt="image" src="https://github.com/user-attachments/assets/3ba1cf1b-f848-4624-998f-559fb0a2da3d" />
 <img width="1359" height="858" alt="image" src="https://github.com/user-attachments/assets/01930ad0-74b8-45f9-9002-d377de049de4" />
+<img width="1359" height="858" alt="image" src="https://github.com/user-attachments/assets/f6d3251c-ce6f-4fdc-8553-f4fd11383ec1" />
 
 ## 构建
 
