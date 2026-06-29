@@ -35,7 +35,7 @@ type InvestmentRecord struct {
 	CurrentTotal  float64                 `json:"current_total"`
 	AfterTotal    float64                 `json:"after_total"`
 	AllocatedCash float64                 `json:"allocated_cash"`
-	RemainingCash float64                 `json:"remaining_cash"`
+	RemainingCash float64                 `json:"remaining_cash,omitempty"`
 	Assets        []InvestmentAssetRecord `json:"assets"`
 }
 
@@ -168,7 +168,7 @@ func buildHistoryPage() Widget {
 						Columns: []TableViewColumn{
 							{Title: "归档时间", Width: 145},
 							{Title: "投资总额", Width: 105, Alignment: AlignFar},
-							{Title: "当次投入", Width: 100, Alignment: AlignFar},
+							{Title: "真实投入", Width: 100, Alignment: AlignFar},
 						},
 						StyleCell:             styleHistoryListCell,
 						OnCurrentIndexChanged: showSelectedHistoryRecord,
@@ -225,7 +225,7 @@ func buildHistoryPage() Widget {
 								Font:      Font{Family: "Microsoft YaHei UI", PointSize: 12, Bold: true},
 							},
 							Label{
-								Text:      "资产明细、备注和当次投入可直接维护",
+								Text:      "资产明细和备注可直接维护",
 								TextColor: mutedTextColor,
 							},
 							HSpacer{},
@@ -258,13 +258,14 @@ func buildHistoryPage() Widget {
 										TextColor:         defaultTextColor,
 										OnEditingFinished: syncHistoryRecordFields,
 									},
-									Label{Text: "当次投入", TextColor: mutedTextColor},
+									Label{Text: "真实投入", TextColor: mutedTextColor},
 									Composite{
 										Background: panelBackground,
 										Layout:     HBox{MarginsZero: true, Spacing: 6},
 										Children: []Widget{
 											NumberEdit{
 												AssignTo:           &historyInvestEdit,
+												Enabled:            false,
 												Decimals:           2,
 												Increment:          500,
 												MinValue:           0,
@@ -447,9 +448,7 @@ func archiveCurrentInvestment() error {
 	}
 
 	record := recordFromResult(result)
-	investmentRecords = append([]InvestmentRecord{record}, investmentRecords...)
-	if err := saveInvestmentRecords(); err != nil {
-		investmentRecords = investmentRecords[1:]
+	if err := appendInvestmentRecord(record); err != nil {
 		return err
 	}
 
@@ -464,11 +463,11 @@ func recordFromResult(result *PortfolioResult) InvestmentRecord {
 	record := InvestmentRecord{
 		ID:            fmt.Sprintf("%d", now.UnixNano()),
 		ArchivedAt:    now.Format(archiveTimeFmt),
-		InvestAmount:  result.InvestAmount,
+		InvestAmount:  result.AllocatedCash,
 		CurrentTotal:  result.CurrentTotal,
-		AfterTotal:    result.AfterTotal,
+		AfterTotal:    result.CurrentTotal + result.AllocatedCash,
 		AllocatedCash: result.AllocatedCash,
-		RemainingCash: result.RemainingCash,
+		RemainingCash: 0,
 		Assets:        make([]InvestmentAssetRecord, 0, len(result.Assets)),
 	}
 	for _, asset := range result.Assets {
@@ -485,7 +484,50 @@ func recordFromResult(result *PortfolioResult) InvestmentRecord {
 			Status:       asset.Status,
 		})
 	}
+	recalculateInvestmentRecord(&record)
 	return record
+}
+
+func suggestedBuyAmounts(result *PortfolioResult) []float64 {
+	if result == nil {
+		return nil
+	}
+	amounts := make([]float64, 0, len(result.Assets))
+	for _, asset := range result.Assets {
+		amounts = append(amounts, asset.BuyAmount)
+	}
+	return amounts
+}
+
+func recordFromResultWithActualBuys(result *PortfolioResult, buyAmounts []float64) (InvestmentRecord, error) {
+	if result == nil {
+		return InvestmentRecord{}, fmt.Errorf("没有可归档的计算结果")
+	}
+	if len(buyAmounts) != len(result.Assets) {
+		return InvestmentRecord{}, fmt.Errorf("真实买入金额数量与资产数量不一致")
+	}
+
+	record := recordFromResult(result)
+	actualInvest := 0.0
+	for i, buyAmount := range buyAmounts {
+		if buyAmount < 0 {
+			return InvestmentRecord{}, fmt.Errorf("%s 的真实买入金额不能为负数", record.Assets[i].Name)
+		}
+		record.Assets[i].BuyAmount = roundMoney(buyAmount)
+		actualInvest += record.Assets[i].BuyAmount
+	}
+	record.InvestAmount = roundMoney(actualInvest)
+	recalculateInvestmentRecord(&record)
+	return record, nil
+}
+
+func appendInvestmentRecord(record InvestmentRecord) error {
+	investmentRecords = append([]InvestmentRecord{cloneInvestmentRecord(record)}, investmentRecords...)
+	if err := saveInvestmentRecords(); err != nil {
+		investmentRecords = investmentRecords[1:]
+		return err
+	}
+	return nil
 }
 
 func recordsFilePath() (string, error) {
@@ -538,6 +580,9 @@ func readInvestmentRecordsFile(path string) ([]InvestmentRecord, error) {
 	}
 
 	records := append([]InvestmentRecord(nil), file.Records...)
+	for i := range records {
+		recalculateInvestmentRecord(&records[i])
+	}
 	sortInvestmentRecords(records)
 	return records, nil
 }
@@ -755,7 +800,6 @@ func syncHistoryRecordFields() {
 		return
 	}
 	selectedHistoryDraft.ArchivedAt = strings.TrimSpace(historyArchiveEdit.Text())
-	selectedHistoryDraft.InvestAmount = historyInvestEdit.Value()
 	selectedHistoryDraft.Notes = strings.TrimSpace(historyNotesEdit.Text())
 	recalculateInvestmentRecord(&selectedHistoryDraft)
 	historyAssetModel.PublishRowsReset()
@@ -765,12 +809,15 @@ func syncHistoryRecordFields() {
 
 func refreshHistorySummary() {
 	recalculateInvestmentRecord(&selectedHistoryDraft)
+	if historyInvestEdit != nil {
+		loadingHistoryEditor = true
+		_ = historyInvestEdit.SetValue(selectedHistoryDraft.InvestAmount)
+		loadingHistoryEditor = false
+	}
 	historySummaryLabel.SetText(fmt.Sprintf(
-		"买入前总额 %s 元｜当次投入 %s 元｜买入总额 %s 元｜未分配 %s 元｜买入后总额 %s 元",
+		"买入前总额 %s 元｜真实投入 %s 元｜买入后总额 %s 元",
 		formatMoney(selectedHistoryDraft.CurrentTotal),
 		formatMoney(selectedHistoryDraft.InvestAmount),
-		formatMoney(selectedHistoryDraft.AllocatedCash),
-		formatMoney(selectedHistoryDraft.RemainingCash),
 		formatMoney(selectedHistoryDraft.AfterTotal),
 	))
 }
@@ -784,8 +831,9 @@ func recalculateInvestmentRecord(record *InvestmentRecord) {
 	}
 	record.CurrentTotal = roundMoney(currentTotal)
 	record.AllocatedCash = roundMoney(allocated)
-	record.AfterTotal = roundMoney(record.CurrentTotal + record.InvestAmount)
-	record.RemainingCash = roundMoney(math.Max(0, record.InvestAmount-record.AllocatedCash))
+	record.InvestAmount = record.AllocatedCash
+	record.AfterTotal = roundMoney(record.CurrentTotal + record.AllocatedCash)
+	record.RemainingCash = 0
 
 	for i := range record.Assets {
 		asset := &record.Assets[i]
@@ -823,7 +871,6 @@ func saveHistoryChanges() error {
 	}
 	selectedHistoryDraft.ArchivedAt = parsed.Format(archiveTimeFmt)
 	selectedHistoryDraft.Notes = strings.TrimSpace(historyNotesEdit.Text())
-	selectedHistoryDraft.InvestAmount = historyInvestEdit.Value()
 	recalculateInvestmentRecord(&selectedHistoryDraft)
 
 	if err := validateInvestmentRecord(selectedHistoryDraft); err != nil {
@@ -863,9 +910,6 @@ func autoSaveHistoryChanges() {
 func validateInvestmentRecord(record InvestmentRecord) error {
 	if len(record.Assets) < 2 {
 		return fmt.Errorf("历史记录至少需要两项资产")
-	}
-	if record.AllocatedCash > record.InvestAmount+0.01 {
-		return fmt.Errorf("资产买入金额合计不能超过当次投入金额")
 	}
 
 	var targetSum float64

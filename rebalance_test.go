@@ -177,6 +177,32 @@ func TestInvestmentRecordStoresBeforeAndAfterDetails(t *testing.T) {
 	}
 }
 
+func TestInvestmentRecordWithActualBuysRecalculatesAfterDetails(t *testing.T) {
+	result, err := CalculatePortfolio(10000, []AssetInput{
+		{Name: "资产A", TargetPct: 40, CurrentAmount: 50000},
+		{Name: "资产B", TargetPct: 60, CurrentAmount: 50000},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	record, err := recordFromResultWithActualBuys(result, []float64{1200, 7600})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertClose(t, record.InvestAmount, 8800, 0.01)
+	assertClose(t, record.AllocatedCash, 8800, 0.01)
+	assertClose(t, record.RemainingCash, 0, 0.01)
+	assertClose(t, record.AfterTotal, 108800, 0.01)
+	assertClose(t, record.Assets[0].BuyAmount, 1200, 0.01)
+	assertClose(t, record.Assets[0].AfterAmount, 51200, 0.01)
+	assertClose(t, record.Assets[0].AfterPct, 47.0588235, 0.0001)
+	assertClose(t, record.Assets[1].BuyAmount, 7600, 0.01)
+	assertClose(t, record.Assets[1].AfterAmount, 57600, 0.01)
+	assertClose(t, record.Assets[1].AfterPct, 52.9411765, 0.0001)
+}
+
 func TestRecalculateInvestmentRecordAfterEditing(t *testing.T) {
 	record := InvestmentRecord{
 		InvestAmount: 10000,
@@ -193,6 +219,25 @@ func TestRecalculateInvestmentRecordAfterEditing(t *testing.T) {
 	assertClose(t, record.Assets[0].BeforePct, 50, 0.0001)
 	assertClose(t, record.Assets[1].AfterAmount, 60000, 0.01)
 	assertClose(t, record.Assets[1].AfterPct, 54.5454545, 0.0001)
+}
+
+func TestRecalculateInvestmentRecordUsesActualBuyTotalAsInvestment(t *testing.T) {
+	record := InvestmentRecord{
+		InvestAmount:  20000,
+		RemainingCash: 12000,
+		Assets: []InvestmentAssetRecord{
+			{Name: "资产A", TargetPct: 40, BeforeAmount: 50000, BuyAmount: 1200},
+			{Name: "资产B", TargetPct: 60, BeforeAmount: 50000, BuyAmount: 6800},
+		},
+	}
+
+	recalculateInvestmentRecord(&record)
+	assertClose(t, record.AllocatedCash, 8000, 0.01)
+	assertClose(t, record.InvestAmount, 8000, 0.01)
+	assertClose(t, record.RemainingCash, 0, 0.01)
+	assertClose(t, record.AfterTotal, 108000, 0.01)
+	assertClose(t, record.Assets[0].AfterPct, 47.4074074, 0.0001)
+	assertClose(t, record.Assets[1].AfterPct, 52.5925926, 0.0001)
 }
 
 func TestFormatResultAlignsSuggestedBuyColumns(t *testing.T) {

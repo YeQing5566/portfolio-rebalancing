@@ -15,6 +15,7 @@ import (
 const (
 	trendTotalSeries = "总资产"
 	trendMonthFmt    = "2006-01"
+	trendDataHint    = "数据为当月最新记录中的买入前金额"
 )
 
 type trendMonthlyRecord struct {
@@ -26,6 +27,7 @@ type trendMonthlyRecord struct {
 type trendPoint struct {
 	Month   time.Time
 	Value   float64
+	Pct     float64
 	Present bool
 }
 
@@ -140,6 +142,11 @@ func buildTrendPage() Widget {
 								Font:      Font{Family: "Microsoft YaHei UI", PointSize: 12, Bold: true},
 							},
 							HSpacer{},
+							Label{
+								Text:      trendDataHint,
+								TextColor: mutedTextColor,
+								Font:      Font{Family: "Microsoft YaHei UI", PointSize: 8},
+							},
 							Label{
 								Text:      "开始月份",
 								TextColor: mutedTextColor,
@@ -478,10 +485,12 @@ func buildTrendChartData(records []InvestmentRecord, selections map[string]bool,
 			point := trendPoint{Month: month}
 			if monthlyRecord, ok := monthly[month]; ok {
 				if name == trendTotalSeries {
-					point.Value = monthlyRecord.Record.CurrentTotal
+					point.Value = trendRecordCurrentTotal(monthlyRecord.Record)
+					point.Pct = 100
 					point.Present = true
-				} else if amount, ok := trendAssetCurrentAmount(monthlyRecord.Record, name); ok {
+				} else if amount, pct, ok := trendAssetCurrentPosition(monthlyRecord.Record, name); ok {
 					point.Value = amount
+					point.Pct = pct
 					point.Present = true
 				}
 			}
@@ -514,7 +523,7 @@ func buildMonthlyTrendRecords(records []InvestmentRecord) map[time.Time]trendMon
 		}
 		month := normalizeTrendMonth(archivedAt)
 		current, exists := monthly[month]
-		if !exists || archivedAt.Before(current.ArchivedAt) {
+		if !exists || archivedAt.After(current.ArchivedAt) {
 			monthly[month] = trendMonthlyRecord{
 				Month:      month,
 				ArchivedAt: archivedAt,
@@ -581,13 +590,37 @@ func normalizeTrendMonth(value time.Time) time.Time {
 }
 
 func trendAssetCurrentAmount(record InvestmentRecord, name string) (float64, bool) {
+	amount, _, ok := trendAssetCurrentPosition(record, name)
+	return amount, ok
+}
+
+func trendAssetCurrentPosition(record InvestmentRecord, name string) (float64, float64, bool) {
 	key := strings.ToLower(strings.TrimSpace(name))
+	total := trendRecordCurrentTotal(record)
 	for _, asset := range record.Assets {
 		if strings.ToLower(strings.TrimSpace(asset.Name)) == key {
-			return asset.BeforeAmount, true
+			pct := 0.0
+			if total > moneyEpsilon {
+				pct = asset.BeforeAmount / total * 100
+			}
+			return asset.BeforeAmount, pct, true
 		}
 	}
-	return 0, false
+	return 0, 0, false
+}
+
+func trendRecordCurrentTotal(record InvestmentRecord) float64 {
+	if record.CurrentTotal > moneyEpsilon {
+		return record.CurrentTotal
+	}
+	total := 0.0
+	for _, asset := range record.Assets {
+		total += asset.BeforeAmount
+	}
+	if len(record.Assets) > 0 {
+		return roundMoney(total)
+	}
+	return record.CurrentTotal
 }
 
 func trendSeriesHasAnyPoint(series []trendSeries) bool {

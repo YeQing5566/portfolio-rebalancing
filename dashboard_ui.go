@@ -20,6 +20,7 @@ const (
 	dashPageCalc = iota
 	dashPageHistory
 	dashPageTrend
+	dashPageYield
 )
 
 const (
@@ -52,6 +53,9 @@ type dashboardUI struct {
 	selectedAsset      int
 	assetScroll        int
 	resultScroll       int
+	archiveDraft       *InvestmentRecord
+	archiveSuggested   []float64
+	archiveScroll      int
 	resultText         string
 	statusText         string
 	hoverAction        string
@@ -60,6 +64,17 @@ type dashboardUI struct {
 	trendOptionScroll  int
 	trendStartText     string
 	trendEndText       string
+	trendDisplayData   trendChartData
+	trendHoverSeries   int
+	trendHoverIndex    int
+	trendPlot          walk.Rectangle
+	yieldOptionScroll  int
+	yieldStartText     string
+	yieldEndText       string
+	yieldData          yieldChartData
+	yieldCalculated    bool
+	yieldHoverIndex    int
+	yieldPlot          walk.Rectangle
 	regionWidth        int
 	regionHeight       int
 	dragMode           string
@@ -196,10 +211,13 @@ func runDashboardApp() {
 	})
 
 	ui := &dashboardUI{
-		page:          dashPageCalc,
-		investAmount:  5000,
-		selectedAsset: -1,
-		resultText:    initialResultText(),
+		page:             dashPageCalc,
+		investAmount:     5000,
+		selectedAsset:    -1,
+		trendHoverSeries: -1,
+		trendHoverIndex:  -1,
+		yieldHoverIndex:  -1,
+		resultText:       initialResultText(),
 	}
 	ui.initFonts()
 	if err := ui.loadPortfolioConfig(); err != nil {
@@ -241,6 +259,7 @@ func runDashboardApp() {
 	}
 	ui.ensureHistorySelection()
 	ui.ensureTrendRange()
+	ui.ensureYieldRange()
 	ui.invalidate()
 	ui.mw.Run()
 }
@@ -372,6 +391,8 @@ func (ui *dashboardUI) paint(canvas *walk.Canvas, _ walk.Rectangle) error {
 		ui.paintHistory(canvas, bounds)
 	case dashPageTrend:
 		ui.paintTrend(canvas, bounds)
+	case dashPageYield:
+		ui.paintYield(canvas, bounds)
 	default:
 		ui.paintCalculator(canvas, bounds)
 	}
@@ -392,6 +413,7 @@ func (ui *dashboardUI) paintChrome(canvas *walk.Canvas, bounds walk.Rectangle) {
 	ui.drawNav(canvas, 22, 216, "平衡买入计算", "nav-calc", dashPageCalc)
 	ui.drawNav(canvas, 22, 280, "历史投资记录", "nav-history", dashPageHistory)
 	ui.drawNav(canvas, 22, 344, "资产趋势图表", "nav-trend", dashPageTrend)
+	ui.drawNav(canvas, 22, 408, "收益数据测算", "nav-yield", dashPageYield)
 
 	ui.drawWindowButton(canvas, rect(bounds.Width-128, 18, 28, 28), "win-min")
 	ui.drawWindowButton(canvas, rect(bounds.Width-88, 18, 28, 28), "win-max")
@@ -546,6 +568,10 @@ func (ui *dashboardUI) paintCalculator(canvas *walk.Canvas, bounds walk.Rectangl
 	ui.drawSplitHandle(canvas, rect(left, resultY-cardGap/2-3, contentW, 6), "split-table")
 
 	result := rect(left, resultY, contentW, resultH)
+	if ui.archiveDraft != nil {
+		ui.drawArchiveConfirmPanel(canvas, result)
+		return
+	}
 	ui.drawPanel(canvas, result, "再平衡建议", "")
 	buttonW := 104
 	ui.drawButton(canvas, rect(result.X+result.Width-buttonW*2-30, result.Y+10, buttonW, dashStyle.buttonHeight), "计算建议", "calc-run", true)
@@ -685,6 +711,68 @@ func (ui *dashboardUI) drawResultText(canvas *walk.Canvas, r walk.Rectangle) {
 	ui.drawScrollBar(canvas, "scroll-result", rect(r.X+r.Width+8, r.Y, 6, maxInt(0, r.Height-4)), len(lines), visible, ui.resultScroll)
 }
 
+func (ui *dashboardUI) drawArchiveConfirmPanel(canvas *walk.Canvas, r walk.Rectangle) {
+	record := ui.archiveDraft
+	if record == nil {
+		return
+	}
+
+	ui.drawPanel(canvas, r, "确认真实买入金额", "")
+	buttonW := 104
+	buttonY := r.Y + 10
+	confirmButtonX := r.X + r.Width - buttonW*2 - 30
+	ui.drawButton(canvas, rect(confirmButtonX, buttonY, buttonW, dashStyle.buttonHeight), "确认保存", "archive-confirm", true)
+	ui.drawButton(canvas, rect(r.X+r.Width-buttonW-18, buttonY, buttonW, dashStyle.buttonHeight), "取消", "archive-cancel", false)
+
+	x := r.X + dashStyle.cardPad
+	w := r.Width - dashStyle.cardPad*2
+	summary := "真实买入合计 " + formatMoney(record.AllocatedCash) + " 元"
+	summaryX := x + 150
+	drawText(canvas, summary, ui.fontSmall, dashColors.accent, rect(summaryX, r.Y+16, maxInt(0, confirmButtonX-summaryX-16), 24), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+	buttonReserve := buttonW*2 + 48
+	drawText(canvas, "默认填入计算建议，可按实际成交金额修改。", ui.fontTiny, dashColors.muted, rect(x, r.Y+42, maxInt(0, w-buttonReserve), 18), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+
+	tableY := r.Y + 72
+	headers := []string{"资产", "建议买入", "真实买入", "买入后金额", "买入后仓位"}
+	widths := []int{maxInt(130, w-120-150-150-110), 120, 150, 150, 110}
+	drawTableHeader(canvas, ui.fontTiny, x, tableY, widths, headers)
+
+	rowY := tableY + 32
+	rowH := 38
+	visible := maxInt(1, maxInt(0, r.Y+r.Height-rowY-12)/rowH)
+	ui.clampArchiveScroll(visible, len(record.Assets))
+	for i := 0; i < visible; i++ {
+		index := ui.archiveScroll + i
+		if index >= len(record.Assets) {
+			break
+		}
+		asset := record.Assets[index]
+		rowRect := rect(x, rowY+i*rowH, sumInts(widths), rowH-6)
+		if i%2 == 0 {
+			roundFill(canvas, dashColors.panel2, rowRect, 7)
+		}
+		cx := x
+		drawText(canvas, asset.Name, ui.fontSmall, dashColors.text, rect(cx+8, rowRect.Y, widths[0]-16, rowRect.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+		cx += widths[0]
+		suggested := 0.0
+		if index < len(ui.archiveSuggested) {
+			suggested = ui.archiveSuggested[index]
+		}
+		drawText(canvas, formatMoney(suggested)+" 元", ui.fontSmall, dashColors.muted, rect(cx+8, rowRect.Y, widths[1]-16, rowRect.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+		cx += widths[1]
+		unitW := 22
+		unitGap := 6
+		buyField := rect(cx+6, rowRect.Y+4, maxInt(0, widths[2]-12-unitGap-unitW), 26)
+		ui.drawField(canvas, buyField, "archive-buy", index, formatMaybeFloat(asset.BuyAmount), "0", true, "")
+		drawText(canvas, "元", ui.fontSmall, dashColors.muted, rect(buyField.X+buyField.Width+unitGap, rowRect.Y, unitW, rowRect.Height), walk.TextLeft|walk.TextVCenter)
+		cx += widths[2]
+		drawText(canvas, formatMoney(asset.AfterAmount)+" 元", ui.fontSmall, dashColors.text, rect(cx+8, rowRect.Y, widths[3]-16, rowRect.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+		cx += widths[3]
+		drawText(canvas, formatPercent(asset.AfterPct), ui.fontSmall, statusTextColor(asset.Status), rect(cx+8, rowRect.Y, widths[4]-16, rowRect.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+	}
+	ui.drawScrollBar(canvas, "scroll-archive-buy", rect(r.X+r.Width-10, rowY, 6, maxInt(0, r.Y+r.Height-rowY-12)), len(record.Assets), visible, ui.archiveScroll)
+}
+
 func resultLines(text string) []string {
 	return strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 }
@@ -766,16 +854,15 @@ func (ui *dashboardUI) drawHistoryDetail(canvas *walk.Canvas, panel walk.Rectang
 	w := panel.Width - 36
 	ui.drawField(canvas, rect(x, y, 220, 38), "hist-archive", -1, selectedHistoryDraft.ArchivedAt, "记录时间", false, "")
 	historyInvestField := rect(x+236, y, 128, 38)
-	ui.drawField(canvas, historyInvestField, "hist-invest", -1, formatMaybeFloat(selectedHistoryDraft.InvestAmount), "当次投入", true, "")
+	ui.drawReadOnlyField(canvas, historyInvestField, formatMoney(selectedHistoryDraft.InvestAmount), "真实投入")
 	drawText(canvas, "元", ui.fontSmall, dashColors.muted, rect(historyInvestField.X+historyInvestField.Width+8, historyInvestField.Y, 22, historyInvestField.Height), walk.TextLeft|walk.TextVCenter)
 	ui.drawField(canvas, rect(x+408, y, w-408, 38), "hist-notes", -1, selectedHistoryDraft.Notes, "备注", false, "")
 
 	summaryY := y + 52
-	summary := fmt.Sprintf("买入前 %s 元  |  投入 %s 元  |  买入后 %s 元  |  未分配 %s 元",
+	summary := fmt.Sprintf("买入前 %s 元  |  真实投入 %s 元  |  买入后 %s 元",
 		formatMoney(selectedHistoryDraft.CurrentTotal),
 		formatMoney(selectedHistoryDraft.InvestAmount),
-		formatMoney(selectedHistoryDraft.AfterTotal),
-		formatMoney(selectedHistoryDraft.RemainingCash))
+		formatMoney(selectedHistoryDraft.AfterTotal))
 	drawText(canvas, summary, ui.fontBold, dashColors.accent, rect(x, summaryY, w, 24), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
 
 	tableY := summaryY + 38
@@ -788,8 +875,8 @@ func (ui *dashboardUI) drawHistoryDetail(canvas *walk.Canvas, panel walk.Rectang
 }
 
 func (ui *dashboardUI) drawHistoryAssetTable(canvas *walk.Canvas, table walk.Rectangle) {
-	headers := []string{"资产", "目标", "买入前", "买入", "买入后", "状态"}
-	widths := []int{maxInt(140, table.Width-86-132-112-132-130), 86, 132, 112, 132, 130}
+	headers := []string{"资产", "目标", "买入前", "买入", "买入后", "买入后仓位", "状态"}
+	widths := []int{maxInt(126, table.Width-76-118-106-120-100-122), 76, 118, 106, 120, 100, 122}
 	drawTableHeader(canvas, ui.fontTiny, table.X, table.Y, widths, headers)
 	rowY := table.Y + 28
 	visible := maxInt(1, (table.Y+table.Height-rowY)/34)
@@ -822,7 +909,9 @@ func (ui *dashboardUI) drawHistoryAssetTable(canvas *walk.Canvas, table walk.Rec
 		cx += widths[3]
 		drawText(canvas, formatMoney(asset.AfterAmount), ui.fontSmall, dashColors.text, rect(cx+8, r.Y, widths[4]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
 		cx += widths[4]
-		drawText(canvas, asset.Status, ui.fontSmall, statusTextColor(asset.Status), rect(cx+8, r.Y, widths[5]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+		drawText(canvas, formatPercent(asset.AfterPct), ui.fontSmall, dashColors.accent, rect(cx+8, r.Y, widths[5]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+		cx += widths[5]
+		drawText(canvas, asset.Status, ui.fontSmall, statusTextColor(asset.Status), rect(cx+8, r.Y, widths[6]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
 	}
 	ui.drawScrollBar(canvas, "scroll-history-detail", rect(table.X+table.Width+8, rowY, 6, maxInt(0, table.Y+table.Height-rowY)), len(selectedHistoryDraft.Assets), visible, ui.historyAssetScroll)
 }
@@ -845,6 +934,7 @@ func (ui *dashboardUI) paintTrend(canvas *walk.Canvas, bounds walk.Rectangle) {
 
 	chartPanel := rect(chartX, top, chartW, height)
 	ui.drawPanel(canvas, chartPanel, "资产金额变化趋势", "")
+	drawText(canvas, trendDataHint, ui.fontTiny, dashColors.muted, rect(chartPanel.X+chartPanel.Width-318, chartPanel.Y+18, 300, 18), walk.TextRight|walk.TextVCenter|walk.TextEndEllipsis)
 	ui.drawField(canvas, rect(chartPanel.X+18, chartPanel.Y+58, 118, 38), "trend-start", -1, ui.trendStartText, "YYYY-MM", false, "")
 	ui.drawField(canvas, rect(chartPanel.X+150, chartPanel.Y+58, 118, 38), "trend-end", -1, ui.trendEndText, "YYYY-MM", false, "")
 	ui.drawButton(canvas, rect(chartPanel.X+284, chartPanel.Y+58, 118, 38), "最近一年", "trend-year", false)
@@ -889,6 +979,8 @@ func (ui *dashboardUI) drawTrendOptions(canvas *walk.Canvas, panel walk.Rectangl
 func (ui *dashboardUI) drawTrendChart(canvas *walk.Canvas, r walk.Rectangle) {
 	roundFill(canvas, walk.RGB(12, 14, 16), r, 10)
 	drawRoundStroke(canvas, dashColors.line, r, 10, 1)
+	ui.trendPlot = walk.Rectangle{}
+	ui.trendDisplayData = trendChartData{}
 	start, end, err := ui.trendRange()
 	if err != nil {
 		drawText(canvas, err.Error(), ui.fontBody, dashColors.muted, r, walk.TextCenter|walk.TextVCenter)
@@ -903,6 +995,7 @@ func (ui *dashboardUI) drawTrendChart(canvas *walk.Canvas, r walk.Rectangle) {
 		drawText(canvas, message, ui.fontBody, dashColors.muted, r, walk.TextCenter|walk.TextVCenter)
 		return
 	}
+	ui.trendDisplayData = data
 	legendY := r.Y + 14
 	legendX := r.X + 18
 	for _, series := range data.Series {
@@ -920,10 +1013,12 @@ func (ui *dashboardUI) drawTrendChart(canvas *walk.Canvas, r walk.Rectangle) {
 		drawText(canvas, "窗口空间不足，无法绘制趋势图", ui.fontBody, dashColors.muted, r, walk.TextCenter|walk.TextVCenter)
 		return
 	}
+	ui.trendPlot = plot
 	minValue, maxValue := trendValueRange(data.Series)
 	drawTrendGridCustom(canvas, ui.fontTiny, plot, minValue, maxValue)
 	drawTrendLinesCustom(canvas, plot, data, minValue, maxValue)
 	drawTrendAxisCustom(canvas, ui.fontTiny, plot, data.Months)
+	ui.drawTrendTooltip(canvas, r, plot, minValue, maxValue)
 }
 
 func drawTrendGridCustom(canvas *walk.Canvas, font *walk.Font, plot walk.Rectangle, minValue, maxValue float64) {
@@ -963,6 +1058,35 @@ func drawTrendLinesCustom(canvas *walk.Canvas, plot walk.Rectangle, data trendCh
 	}
 }
 
+func (ui *dashboardUI) drawTrendTooltip(canvas *walk.Canvas, chart, plot walk.Rectangle, minValue, maxValue float64) {
+	if ui.trendHoverSeries < 0 || ui.trendHoverSeries >= len(ui.trendDisplayData.Series) {
+		return
+	}
+	series := ui.trendDisplayData.Series[ui.trendHoverSeries]
+	if ui.trendHoverIndex < 0 || ui.trendHoverIndex >= len(series.Points) {
+		return
+	}
+	point := series.Points[ui.trendHoverIndex]
+	if !point.Present {
+		return
+	}
+	px := trendPointX(plot, ui.trendHoverIndex, len(ui.trendDisplayData.Months))
+	py := trendPointY(plot, minValue, maxValue, point.Value)
+	tipW := 226
+	tipH := 86
+	tx := px + 14
+	if tx+tipW > chart.X+chart.Width-10 {
+		tx = px - tipW - 14
+	}
+	ty := clampInt(py-tipH/2, chart.Y+10, chart.Y+chart.Height-tipH-10)
+	tip := rect(tx, ty, tipW, tipH)
+	roundFill(canvas, walk.RGB(24, 24, 24), tip, 9)
+	drawRoundStroke(canvas, series.Color, tip, 9, 1)
+	drawText(canvas, series.Name+"  "+point.Month.Format(trendMonthFmt), ui.fontBold, dashColors.text, rect(tip.X+12, tip.Y+8, tip.Width-24, 20), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+	drawText(canvas, "金额 "+formatMoney(point.Value)+" 元", ui.fontSmall, dashColors.accent, rect(tip.X+12, tip.Y+34, tip.Width-24, 18), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+	drawText(canvas, "仓位 "+formatPercent(point.Pct), ui.fontSmall, dashColors.text, rect(tip.X+12, tip.Y+56, tip.Width-24, 18), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+}
+
 func drawTrendAxisCustom(canvas *walk.Canvas, font *walk.Font, plot walk.Rectangle, months []time.Time) {
 	if len(months) == 0 {
 		return
@@ -980,6 +1104,188 @@ func drawTrendAxisCustom(canvas *walk.Canvas, font *walk.Font, plot walk.Rectang
 		}
 		drawText(canvas, label, font, dashColors.muted, rect(x-34, plot.Y+plot.Height+8, 68, 20), walk.TextCenter|walk.TextVCenter)
 	}
+}
+
+func (ui *dashboardUI) paintYield(canvas *walk.Canvas, bounds walk.Rectangle) {
+	left := dashStyle.sidebarWidth + dashStyle.pagePad
+	top := 88
+	gap := dashStyle.gap
+	contentW := bounds.Width - left - dashStyle.pagePad
+	optionsW := maxInt(0, (contentW-gap)/4)
+	chartX := left + optionsW + gap
+	chartW := contentW - optionsW - gap
+	height := bounds.Height - top - dashStyle.pagePad
+
+	drawText(canvas, "收益数据测算", ui.fontTitle, dashColors.text, rect(left, 30, 240, 34), walk.TextLeft|walk.TextVCenter)
+
+	options := rect(left, top, optionsW, height)
+	ui.drawPanel(canvas, options, "资产选择", "")
+	ui.drawYieldOptions(canvas, options)
+
+	chartPanel := rect(chartX, top, chartW, height)
+	ui.drawPanel(canvas, chartPanel, "收益率测算", "")
+	drawText(canvas, yieldDataHint, ui.fontTiny, dashColors.muted, rect(chartPanel.X+chartPanel.Width-360, chartPanel.Y+18, 342, 18), walk.TextRight|walk.TextVCenter|walk.TextEndEllipsis)
+	ui.drawField(canvas, rect(chartPanel.X+18, chartPanel.Y+58, 118, 38), "yield-start", -1, ui.yieldStartText, "YYYY-MM", false, "")
+	ui.drawField(canvas, rect(chartPanel.X+150, chartPanel.Y+58, 118, 38), "yield-end", -1, ui.yieldEndText, "YYYY-MM", false, "")
+	ui.drawButton(canvas, rect(chartPanel.X+284, chartPanel.Y+58, 118, 38), "最近一年", "yield-year", false)
+	buttonW := 118
+	ui.drawButton(canvas, rect(chartPanel.X+chartPanel.Width-dashStyle.cardPad-buttonW, chartPanel.Y+58, buttonW, 38), "测算收益", "yield-run", true)
+
+	summary := ui.yieldSummaryText()
+	drawText(canvas, summary, ui.fontTiny, dashColors.muted, rect(chartPanel.X+18, chartPanel.Y+102, chartPanel.Width-36, 18), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+
+	chart := rect(chartPanel.X+18, chartPanel.Y+132, chartPanel.Width-36, chartPanel.Height-154)
+	ui.drawYieldChart(canvas, chart)
+}
+
+func (ui *dashboardUI) drawYieldOptions(canvas *walk.Canvas, panel walk.Rectangle) {
+	options := trendSeriesOptions(investmentRecords)
+	syncYieldSelections(options)
+	x := panel.X + 16
+	y := panel.Y + 54
+	w := panel.Width - 32
+	visible := maxInt(1, (panel.Y+panel.Height-y-18)/48)
+	ui.clampYieldOptionScroll(visible, len(options))
+	for i := 0; i < visible; i++ {
+		index := ui.yieldOptionScroll + i
+		if index >= len(options) {
+			break
+		}
+		name := options[index]
+		r := rect(x, y+i*48, w, 40)
+		roundFill(canvas, dashColors.panel2, r, 9)
+		drawRoundStroke(canvas, dashColors.line, r, 9, 1)
+		box := rect(r.X+r.Width-34, r.Y+10, 20, 20)
+		drawRoundStroke(canvas, dashColors.line2, box, 5, 1)
+		if yieldSelections[name] {
+			roundFill(canvas, dashColors.accent, inset(box, 4, 4), 4)
+		}
+		drawText(canvas, name, ui.fontSmall, dashColors.text, rect(r.X+14, r.Y+8, r.Width-62, 24), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+		ui.actions = append(ui.actions, dashAction{Rect: r, Kind: dashActionToggle, Key: "yield-toggle", Index: index, Name: name})
+	}
+	if len(options) == 0 {
+		drawText(canvas, "暂无历史记录可测算收益", ui.fontBody, dashColors.muted, rect(x, y+36, w, 60), walk.TextCenter|walk.TextVCenter)
+	}
+	ui.drawScrollBar(canvas, "scroll-yield-options", rect(panel.X+panel.Width-12, y, 6, maxInt(0, panel.Y+panel.Height-y-18)), len(options), visible, ui.yieldOptionScroll)
+}
+
+func (ui *dashboardUI) drawYieldChart(canvas *walk.Canvas, r walk.Rectangle) {
+	roundFill(canvas, walk.RGB(12, 14, 16), r, 10)
+	drawRoundStroke(canvas, dashColors.line, r, 10, 1)
+	ui.yieldPlot = walk.Rectangle{}
+	if !ui.yieldCalculated {
+		drawText(canvas, yieldInitialMessage, ui.fontBody, dashColors.muted, r, walk.TextCenter|walk.TextVCenter)
+		return
+	}
+
+	data := ui.yieldData
+	if len(data.Months) == 0 || len(data.Points) == 0 || data.Message != "" && !yieldPointsHaveAny(data.Points) {
+		message := data.Message
+		if message == "" {
+			message = "暂无历史记录可测算收益"
+		}
+		drawText(canvas, message, ui.fontBody, dashColors.muted, r, walk.TextCenter|walk.TextVCenter)
+		return
+	}
+
+	plot := rect(r.X+84, r.Y+28, r.Width-112, r.Height-80)
+	if plot.Height < 120 || plot.Width < 180 {
+		drawText(canvas, "窗口空间不足，无法绘制收益图", ui.fontBody, dashColors.muted, r, walk.TextCenter|walk.TextVCenter)
+		return
+	}
+	ui.yieldPlot = plot
+	minValue, maxValue := yieldValueRange(data.Points)
+	drawYieldGridCustom(canvas, ui.fontTiny, plot, minValue, maxValue)
+	drawYieldLineCustom(canvas, plot, data, minValue, maxValue)
+	drawTrendAxisCustom(canvas, ui.fontTiny, plot, data.Months)
+	ui.drawYieldTooltip(canvas, r, plot, minValue, maxValue)
+}
+
+func drawYieldGridCustom(canvas *walk.Canvas, font *walk.Font, plot walk.Rectangle, minValue, maxValue float64) {
+	for i := 0; i <= 4; i++ {
+		y := plot.Y + plot.Height - i*plot.Height/4
+		drawLine(canvas, walk.RGB(36, 42, 46), plot.X, y, plot.X+plot.Width, y, 1)
+		value := minValue + (maxValue-minValue)*float64(i)/4
+		drawText(canvas, formatYieldRate(value), font, dashColors.muted, rect(plot.X-78, y-10, 68, 18), walk.TextRight|walk.TextVCenter)
+	}
+	drawLine(canvas, walk.RGB(60, 70, 76), plot.X, plot.Y, plot.X, plot.Y+plot.Height, 1)
+	drawLine(canvas, walk.RGB(60, 70, 76), plot.X, plot.Y+plot.Height, plot.X+plot.Width, plot.Y+plot.Height, 1)
+}
+
+func drawYieldLineCustom(canvas *walk.Canvas, plot walk.Rectangle, data yieldChartData, minValue, maxValue float64) {
+	pen, penBrush := chartPen(dashColors.accent, 3)
+	brush := solidBrush(dashColors.accent)
+	defer pen.Dispose()
+	defer penBrush.Dispose()
+	defer brush.Dispose()
+
+	var previous *walk.Point
+	for i, point := range data.Points {
+		if !point.Present {
+			previous = nil
+			continue
+		}
+		current := walk.Point{
+			X: trendPointX(plot, i, len(data.Months)),
+			Y: trendPointY(plot, minValue, maxValue, point.Rate),
+		}
+		if previous != nil {
+			_ = canvas.DrawLinePixels(pen, *previous, current)
+		}
+		_ = canvas.FillEllipsePixels(brush, rect(current.X-4, current.Y-4, 8, 8))
+		cp := current
+		previous = &cp
+	}
+}
+
+func (ui *dashboardUI) drawYieldTooltip(canvas *walk.Canvas, chart, plot walk.Rectangle, minValue, maxValue float64) {
+	if ui.yieldHoverIndex < 0 || ui.yieldHoverIndex >= len(ui.yieldData.Points) {
+		return
+	}
+	point := ui.yieldData.Points[ui.yieldHoverIndex]
+	if !point.Present {
+		return
+	}
+	px := trendPointX(plot, ui.yieldHoverIndex, len(ui.yieldData.Months))
+	py := trendPointY(plot, minValue, maxValue, point.Rate)
+	tipW := 224
+	tipH := 78
+	tx := px + 14
+	if tx+tipW > chart.X+chart.Width-10 {
+		tx = px - tipW - 14
+	}
+	ty := clampInt(py-tipH/2, chart.Y+10, chart.Y+chart.Height-tipH-10)
+	tip := rect(tx, ty, tipW, tipH)
+	roundFill(canvas, walk.RGB(24, 24, 24), tip, 9)
+	drawRoundStroke(canvas, walk.RGB(88, 57, 8), tip, 9, 1)
+	drawText(canvas, point.Month.Format(trendMonthFmt), ui.fontBold, dashColors.text, rect(tip.X+12, tip.Y+8, tip.Width-24, 20), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+	drawText(canvas, "总收益金额 "+formatMoney(point.Profit)+" 元", ui.fontSmall, dashColors.accent, rect(tip.X+12, tip.Y+32, tip.Width-24, 18), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+	drawText(canvas, "收益率 "+formatYieldRate(point.Rate), ui.fontSmall, dashColors.text, rect(tip.X+12, tip.Y+52, tip.Width-24, 18), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+}
+
+func (ui *dashboardUI) yieldSummaryText() string {
+	if !ui.yieldCalculated {
+		return yieldInitialMessage
+	}
+	if ui.yieldData.Message != "" && !yieldPointsHaveAny(ui.yieldData.Points) {
+		return ui.yieldData.Message
+	}
+	latest, ok := latestYieldPoint(ui.yieldData.Points)
+	if !ok {
+		return "暂无可显示收益数据"
+	}
+	return fmt.Sprintf(
+		"测算对象：%s｜最新点：%s｜总收益 %s 元｜收益率 %s｜年化 %s",
+		ui.yieldData.SelectionLabel,
+		latest.Month.Format(trendMonthFmt),
+		formatMoney(latest.Profit),
+		formatYieldRate(latest.Rate),
+		formatYieldRate(latest.AnnualizedRate),
+	)
+}
+
+func formatYieldRate(value float64) string {
+	return formatPercent(value * 100)
 }
 
 func (ui *dashboardUI) drawPanel(canvas *walk.Canvas, r walk.Rectangle, title, sub string) {
@@ -1056,6 +1362,18 @@ func (ui *dashboardUI) drawField(canvas *walk.Canvas, r walk.Rectangle, key stri
 	format := walk.TextLeft | walk.TextVCenter | walk.TextEndEllipsis
 	drawText(canvas, display, ui.fontSmall, color, fieldTextRect(r), format)
 	ui.fields = append(ui.fields, dashField{Rect: r, Key: key, Index: index, Value: value, Placeholder: placeholder, Numeric: numeric, Suffix: suffix})
+}
+
+func (ui *dashboardUI) drawReadOnlyField(canvas *walk.Canvas, r walk.Rectangle, value, placeholder string) {
+	roundFill(canvas, walk.RGB(26, 26, 26), r, 8)
+	drawRoundStroke(canvas, dashColors.line, r, 8, 1)
+	display := strings.TrimSpace(value)
+	color := dashColors.text
+	if display == "" {
+		display = placeholder
+		color = dashColors.faint
+	}
+	drawText(canvas, display, ui.fontSmall, color, fieldTextRect(r), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
 }
 
 func fieldTextRect(r walk.Rectangle) walk.Rectangle {
@@ -1186,6 +1504,20 @@ func (ui *dashboardUI) handleMouseMove(x, y int, _ walk.MouseButton) {
 		ui.updateDrag()
 		return
 	}
+	oldTrendHoverSeries := ui.trendHoverSeries
+	oldTrendHoverIndex := ui.trendHoverIndex
+	if ui.page == dashPageTrend {
+		ui.trendHoverSeries, ui.trendHoverIndex = ui.trendPointAt(x, y)
+	} else {
+		ui.trendHoverSeries = -1
+		ui.trendHoverIndex = -1
+	}
+	oldYieldHover := ui.yieldHoverIndex
+	if ui.page == dashPageYield {
+		ui.yieldHoverIndex = ui.yieldPointIndexAt(x, y)
+	} else {
+		ui.yieldHoverIndex = -1
+	}
 	hover := ""
 	if bar := ui.scrollBarAt(x, y); bar != nil {
 		hover = bar.Key
@@ -1198,7 +1530,7 @@ func (ui *dashboardUI) handleMouseMove(x, y int, _ walk.MouseButton) {
 		}
 	}
 	ui.updateCursor(x, y, hover)
-	if hover != ui.hoverAction {
+	if hover != ui.hoverAction || oldYieldHover != ui.yieldHoverIndex || oldTrendHoverSeries != ui.trendHoverSeries || oldTrendHoverIndex != ui.trendHoverIndex {
 		ui.hoverAction = hover
 		ui.invalidate()
 	}
@@ -1458,8 +1790,14 @@ func (ui *dashboardUI) handleMouseWheel(x, y int, button walk.MouseButton) {
 		if y >= resultY {
 			resultH := maxInt(220, mainH-topH-dashStyle.gap)
 			visible := maxInt(1, maxInt(0, resultH-124)/21)
-			ui.resultScroll += step
-			ui.clampResultScroll(visible, len(resultLines(ui.resultText)))
+			if ui.archiveDraft != nil {
+				archiveVisible := maxInt(1, maxInt(0, resultH-116)/38)
+				ui.archiveScroll += step
+				ui.clampArchiveScroll(archiveVisible, len(ui.archiveDraft.Assets))
+			} else {
+				ui.resultScroll += step
+				ui.clampResultScroll(visible, len(resultLines(ui.resultText)))
+			}
 		} else {
 			ui.assetScroll += step
 			ui.clampAssetScroll(assetTableVisibleRows(topH))
@@ -1485,6 +1823,15 @@ func (ui *dashboardUI) handleMouseWheel(x, y int, button walk.MouseButton) {
 			ui.trendOptionScroll += step
 			ui.clampTrendOptionScroll(7, len(trendSeriesOptions(investmentRecords)))
 		}
+	case dashPageYield:
+		bounds := ui.canvas.ClientBoundsPixels()
+		left := dashStyle.sidebarWidth + dashStyle.pagePad
+		contentW := bounds.Width - left - dashStyle.pagePad
+		yieldBoundary := left + maxInt(0, (contentW-dashStyle.gap)/4) + dashStyle.gap/2
+		if x < yieldBoundary {
+			ui.yieldOptionScroll += step
+			ui.clampYieldOptionScroll(7, len(trendSeriesOptions(investmentRecords)))
+		}
 	}
 	ui.invalidate()
 }
@@ -1505,7 +1852,11 @@ func (ui *dashboardUI) handleAction(action dashAction) {
 	case "nav-trend":
 		ui.page = dashPageTrend
 		ui.ensureTrendRange()
+	case "nav-yield":
+		ui.page = dashPageYield
+		ui.ensureYieldRange()
 	case "calc-add":
+		ui.clearArchiveDraft()
 		ui.assets = append(ui.assets, AssetInput{})
 		ui.selectedAsset = len(ui.assets) - 1
 		if ui.autoSavePortfolioConfig() {
@@ -1518,7 +1869,12 @@ func (ui *dashboardUI) handleAction(action dashAction) {
 	case "calc-run":
 		ui.calculate()
 	case "calc-save":
-		ui.saveCurrentInvestment()
+		ui.openArchiveConfirmation()
+	case "archive-confirm":
+		ui.confirmArchive()
+	case "archive-cancel":
+		ui.clearArchiveDraft()
+		ui.statusText = "已取消保存归档"
 	case "history-row":
 		ui.selectHistory(action.Index)
 	case "hasset-row":
@@ -1533,8 +1889,19 @@ func (ui *dashboardUI) handleAction(action dashAction) {
 		ui.exportHistory()
 	case "trend-toggle":
 		trendSelections[action.Name] = !trendSelections[action.Name]
+		ui.trendHoverSeries = -1
+		ui.trendHoverIndex = -1
 	case "trend-year":
 		ui.setTrendRecentYear()
+		ui.trendHoverSeries = -1
+		ui.trendHoverIndex = -1
+	case "yield-toggle":
+		yieldSelections[action.Name] = !yieldSelections[action.Name]
+		ui.markYieldDirty()
+	case "yield-year":
+		ui.setYieldRecentYear()
+	case "yield-run":
+		ui.runYieldCalculation()
 	}
 	ui.invalidate()
 }
@@ -1642,33 +2009,31 @@ func (ui *dashboardUI) applyField(field dashField, text string) {
 	switch field.Key {
 	case "invest":
 		if value, ok := parse(); ok {
+			ui.clearArchiveDraft()
 			ui.investAmount = value
 			ui.autoSavePortfolioConfig()
 		}
 	case "asset-name":
 		if field.Index >= 0 && field.Index < len(ui.assets) {
+			ui.clearArchiveDraft()
 			ui.assets[field.Index].Name = strings.TrimSpace(text)
 			ui.autoSavePortfolioConfig()
 		}
 	case "asset-target":
 		if value, ok := parse(); ok && field.Index >= 0 && field.Index < len(ui.assets) {
+			ui.clearArchiveDraft()
 			ui.assets[field.Index].TargetPct = value
 			ui.autoSavePortfolioConfig()
 		}
 	case "asset-current":
 		if value, ok := parse(); ok && field.Index >= 0 && field.Index < len(ui.assets) {
+			ui.clearArchiveDraft()
 			ui.assets[field.Index].CurrentAmount = value
 			ui.autoSavePortfolioConfig()
 		}
 	case "hist-archive":
 		selectedHistoryDraft.ArchivedAt = text
 		ui.autoSaveHistoryDraft()
-	case "hist-invest":
-		if value, ok := parse(); ok {
-			selectedHistoryDraft.InvestAmount = value
-			recalculateInvestmentRecord(&selectedHistoryDraft)
-			ui.autoSaveHistoryDraft()
-		}
 	case "hist-notes":
 		selectedHistoryDraft.Notes = text
 		ui.autoSaveHistoryDraft()
@@ -1700,10 +2065,36 @@ func (ui *dashboardUI) applyField(field dashField, text string) {
 			recalculateInvestmentRecord(&selectedHistoryDraft)
 			ui.autoSaveHistoryDraft()
 		}
+	case "archive-buy":
+		if ui.archiveDraft == nil || field.Index < 0 || field.Index >= len(ui.archiveDraft.Assets) {
+			return
+		}
+		value := 0.0
+		if strings.TrimSpace(text) != "" {
+			parsed, err := strconv.ParseFloat(strings.ReplaceAll(text, ",", ""), 64)
+			if err != nil {
+				ui.statusText = "请输入有效数字"
+				return
+			}
+			if parsed < 0 {
+				ui.statusText = "真实买入金额不能为负数"
+				return
+			}
+			value = parsed
+		}
+		ui.archiveDraft.Assets[field.Index].BuyAmount = roundMoney(value)
+		recalculateInvestmentRecord(ui.archiveDraft)
+		ui.statusText = "已更新真实买入金额"
 	case "trend-start":
 		ui.trendStartText = text
 	case "trend-end":
 		ui.trendEndText = text
+	case "yield-start":
+		ui.yieldStartText = text
+		ui.markYieldDirty()
+	case "yield-end":
+		ui.yieldEndText = text
+		ui.markYieldDirty()
 	}
 }
 
@@ -1712,6 +2103,7 @@ func (ui *dashboardUI) deleteSelectedAsset() {
 		ui.statusText = "请先选择要删除的资产"
 		return
 	}
+	ui.clearArchiveDraft()
 	ui.assets = append(ui.assets[:ui.selectedAsset], ui.assets[ui.selectedAsset+1:]...)
 	if ui.selectedAsset >= len(ui.assets) {
 		ui.selectedAsset = len(ui.assets) - 1
@@ -1723,6 +2115,7 @@ func (ui *dashboardUI) deleteSelectedAsset() {
 }
 
 func (ui *dashboardUI) calculate() {
+	ui.clearArchiveDraft()
 	result, err := CalculatePortfolio(ui.investAmount, ui.assets)
 	if err != nil {
 		ui.statusText = "输入有误：" + err.Error()
@@ -1733,26 +2126,61 @@ func (ui *dashboardUI) calculate() {
 	ui.statusText = "计算完成：所有目标金额均基于买入后的组合总额"
 }
 
-func (ui *dashboardUI) saveCurrentInvestment() {
+func (ui *dashboardUI) openArchiveConfirmation() {
 	result, err := CalculatePortfolio(ui.investAmount, ui.assets)
 	if err != nil {
 		ui.statusText = "保存失败：" + err.Error()
 		walk.MsgBox(ui.mw, "保存失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
-	record := recordFromResult(result)
-	investmentRecords = append([]InvestmentRecord{record}, investmentRecords...)
-	if err := saveInvestmentRecords(); err != nil {
-		investmentRecords = investmentRecords[1:]
+	suggested := suggestedBuyAmounts(result)
+	record, err := recordFromResultWithActualBuys(result, suggested)
+	if err != nil {
 		ui.statusText = "保存失败：" + err.Error()
 		walk.MsgBox(ui.mw, "保存失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
+	ui.archiveDraft = &record
+	ui.archiveSuggested = append([]float64(nil), suggested...)
+	ui.archiveScroll = 0
 	ui.resultText = FormatResult(result)
+	ui.resultScroll = 0
+	ui.statusText = "请确认真实买入金额后点击确认保存"
+}
+
+func (ui *dashboardUI) confirmArchive() {
+	if ui.archiveDraft == nil {
+		ui.openArchiveConfirmation()
+		return
+	}
+	record := cloneInvestmentRecord(*ui.archiveDraft)
+	recalculateInvestmentRecord(&record)
+	if err := appendInvestmentRecord(record); err != nil {
+		ui.statusText = "保存失败：" + err.Error()
+		walk.MsgBox(ui.mw, "保存失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		return
+	}
+	summary := fmt.Sprintf(
+		"%s\r\n\r\n真实买入合计：%s 元\r\n买入后总额：%s 元",
+		saveArchiveSuccessMessage,
+		formatMoney(record.AllocatedCash),
+		formatMoney(record.AfterTotal),
+	)
+	ui.clearArchiveDraft()
+	ui.resultText = summary
+	ui.resultScroll = 0
 	ui.selectHistory(0)
 	ui.ensureTrendRange()
+	ui.ensureYieldRange()
+	ui.markYieldDirty()
 	ui.statusText = saveArchiveSuccessMessage
 	walk.MsgBox(ui.mw, "保存成功", saveArchiveSuccessMessage, walk.MsgBoxOK|walk.MsgBoxIconInformation)
+}
+
+func (ui *dashboardUI) clearArchiveDraft() {
+	ui.archiveDraft = nil
+	ui.archiveSuggested = nil
+	ui.archiveScroll = 0
 }
 
 func (ui *dashboardUI) loadPortfolioConfig() error {
@@ -1878,6 +2306,8 @@ func (ui *dashboardUI) saveHistoryDraft() error {
 		selectedAssetIndex = 0
 	}
 	ui.ensureTrendRange()
+	ui.ensureYieldRange()
+	ui.markYieldDirty()
 	return nil
 }
 
@@ -1899,6 +2329,9 @@ func (ui *dashboardUI) deleteHistory() {
 	selectedAssetIndex = -1
 	selectedHistoryDraft = InvestmentRecord{}
 	ui.ensureHistorySelection()
+	ui.ensureTrendRange()
+	ui.ensureYieldRange()
+	ui.markYieldDirty()
 	ui.statusText = "历史投资记录已删除"
 }
 
@@ -1970,6 +2403,8 @@ func (ui *dashboardUI) importHistory() {
 	selectedAssetIndex = -1
 	ui.ensureHistorySelection()
 	ui.ensureTrendRange()
+	ui.ensureYieldRange()
+	ui.markYieldDirty()
 	ui.statusText = "历史投资记录已导入：" + dlg.FilePath
 }
 
@@ -2024,12 +2459,152 @@ func (ui *dashboardUI) trendRange() (time.Time, time.Time, error) {
 	return start, end, nil
 }
 
+func (ui *dashboardUI) ensureYieldRange() {
+	start, end, ok := trendMonthBounds(investmentRecords)
+	if !ok {
+		if ui.yieldStartText == "" {
+			now := normalizeTrendMonth(time.Now())
+			ui.yieldStartText = now.AddDate(0, -11, 0).Format(trendMonthFmt)
+			ui.yieldEndText = now.Format(trendMonthFmt)
+		}
+		syncYieldSelections(trendSeriesOptions(investmentRecords))
+		return
+	}
+	if ui.yieldStartText == "" || ui.yieldEndText == "" {
+		ui.yieldStartText = start.Format(trendMonthFmt)
+		ui.yieldEndText = end.Format(trendMonthFmt)
+	}
+	syncYieldSelections(trendSeriesOptions(investmentRecords))
+}
+
+func (ui *dashboardUI) setYieldRecentYear() {
+	_, latest, ok := trendMonthBounds(investmentRecords)
+	if !ok {
+		latest = normalizeTrendMonth(time.Now())
+	}
+	ui.yieldStartText = latest.AddDate(0, -11, 0).Format(trendMonthFmt)
+	ui.yieldEndText = latest.Format(trendMonthFmt)
+	ui.markYieldDirty()
+	ui.statusText = "已切换到最近一年收益测算范围"
+}
+
+func (ui *dashboardUI) yieldRange() (time.Time, time.Time, error) {
+	startText := strings.TrimSpace(ui.yieldStartText)
+	endText := strings.TrimSpace(ui.yieldEndText)
+	if startText == "" || endText == "" {
+		start, end, ok := trendMonthBounds(investmentRecords)
+		if !ok {
+			return time.Time{}, time.Time{}, fmt.Errorf("暂无历史记录可测算收益")
+		}
+		return start, end, nil
+	}
+	start, err := parseTrendMonth(startText)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("开始月份格式应为 YYYY-MM")
+	}
+	end, err := parseTrendMonth(endText)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("结束月份格式应为 YYYY-MM")
+	}
+	if start.After(end) {
+		return time.Time{}, time.Time{}, fmt.Errorf("开始月份不能晚于结束月份")
+	}
+	return start, end, nil
+}
+
+func (ui *dashboardUI) runYieldCalculation() {
+	start, end, err := ui.yieldRange()
+	if err != nil {
+		ui.yieldCalculated = true
+		ui.yieldData = yieldChartData{Message: err.Error()}
+		ui.yieldHoverIndex = -1
+		ui.statusText = "收益测算失败：" + err.Error()
+		walk.MsgBox(ui.mw, "收益测算失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconWarning)
+		return
+	}
+
+	options := trendSeriesOptions(investmentRecords)
+	syncYieldSelections(options)
+	ui.yieldData = buildYieldChartData(investmentRecords, yieldSelections, start, end)
+	ui.yieldCalculated = true
+	ui.yieldHoverIndex = -1
+	if ui.yieldData.Message != "" && !yieldPointsHaveAny(ui.yieldData.Points) {
+		ui.statusText = "收益测算完成：" + ui.yieldData.Message
+		return
+	}
+	latest, ok := latestYieldPoint(ui.yieldData.Points)
+	if !ok {
+		ui.statusText = "收益测算完成：暂无可显示收益数据"
+		return
+	}
+	ui.statusText = fmt.Sprintf("收益测算完成：%s 最新收益率 %s，年化 %s", ui.yieldData.SelectionLabel, formatYieldRate(latest.Rate), formatYieldRate(latest.AnnualizedRate))
+}
+
+func (ui *dashboardUI) markYieldDirty() {
+	ui.yieldCalculated = false
+	ui.yieldData = yieldChartData{}
+	ui.yieldHoverIndex = -1
+}
+
+func (ui *dashboardUI) trendPointAt(x, y int) (int, int) {
+	if !contains(ui.trendPlot, x, y) || len(ui.trendDisplayData.Months) == 0 {
+		return -1, -1
+	}
+	minValue, maxValue := trendValueRange(ui.trendDisplayData.Series)
+	bestSeries := -1
+	bestIndex := -1
+	bestDistance := 0
+	for seriesIndex, series := range ui.trendDisplayData.Series {
+		for pointIndex, point := range series.Points {
+			if !point.Present {
+				continue
+			}
+			px := trendPointX(ui.trendPlot, pointIndex, len(ui.trendDisplayData.Months))
+			py := trendPointY(ui.trendPlot, minValue, maxValue, point.Value)
+			dx := x - px
+			dy := y - py
+			distance := dx*dx + dy*dy
+			if distance > 100 {
+				continue
+			}
+			if bestSeries < 0 || distance < bestDistance {
+				bestSeries = seriesIndex
+				bestIndex = pointIndex
+				bestDistance = distance
+			}
+		}
+	}
+	return bestSeries, bestIndex
+}
+
+func (ui *dashboardUI) yieldPointIndexAt(x, y int) int {
+	if !ui.yieldCalculated || !contains(ui.yieldPlot, x, y) || len(ui.yieldData.Months) == 0 {
+		return -1
+	}
+	minValue, maxValue := yieldValueRange(ui.yieldData.Points)
+	for i, point := range ui.yieldData.Points {
+		if !point.Present {
+			continue
+		}
+		px := trendPointX(ui.yieldPlot, i, len(ui.yieldData.Months))
+		py := trendPointY(ui.yieldPlot, minValue, maxValue, point.Rate)
+		if absInt(x-px) <= 8 && absInt(y-py) <= 8 {
+			return i
+		}
+	}
+	return -1
+}
+
 func (ui *dashboardUI) clampAssetScroll(visible int) {
 	ui.assetScroll = clampInt(ui.assetScroll, 0, maxInt(0, len(ui.assets)-visible))
 }
 
 func (ui *dashboardUI) clampResultScroll(visible, total int) {
 	ui.resultScroll = clampInt(ui.resultScroll, 0, maxInt(0, total-visible))
+}
+
+func (ui *dashboardUI) clampArchiveScroll(visible, total int) {
+	ui.archiveScroll = clampInt(ui.archiveScroll, 0, maxInt(0, total-visible))
 }
 
 func (ui *dashboardUI) clampHistoryScroll(visible int) {
@@ -2044,6 +2619,10 @@ func (ui *dashboardUI) clampTrendOptionScroll(visible, total int) {
 	ui.trendOptionScroll = clampInt(ui.trendOptionScroll, 0, maxInt(0, total-visible))
 }
 
+func (ui *dashboardUI) clampYieldOptionScroll(visible, total int) {
+	ui.yieldOptionScroll = clampInt(ui.yieldOptionScroll, 0, maxInt(0, total-visible))
+}
+
 func (ui *dashboardUI) setScrollOffset(key string, offset, total, visible int) {
 	offset = clampInt(offset, 0, maxInt(0, total-visible))
 	switch key {
@@ -2051,12 +2630,16 @@ func (ui *dashboardUI) setScrollOffset(key string, offset, total, visible int) {
 		ui.assetScroll = offset
 	case "scroll-result":
 		ui.resultScroll = offset
+	case "scroll-archive-buy":
+		ui.archiveScroll = offset
 	case "scroll-history-list":
 		ui.historyScroll = offset
 	case "scroll-history-detail":
 		ui.historyAssetScroll = offset
 	case "scroll-trend-options":
 		ui.trendOptionScroll = offset
+	case "scroll-yield-options":
+		ui.yieldOptionScroll = offset
 	}
 }
 

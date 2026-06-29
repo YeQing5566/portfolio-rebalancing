@@ -2,7 +2,7 @@ package main
 
 import "testing"
 
-func TestBuildMonthlyTrendRecordsUsesEarliestRecordInMonth(t *testing.T) {
+func TestBuildMonthlyTrendRecordsUsesLatestRecordInMonth(t *testing.T) {
 	records := []InvestmentRecord{
 		{
 			ArchivedAt:   "2026-01-20 09:00:00",
@@ -32,11 +32,11 @@ func TestBuildMonthlyTrendRecordsUsesEarliestRecordInMonth(t *testing.T) {
 	if !ok {
 		t.Fatal("expected January record")
 	}
-	if got.Record.ArchivedAt != "2026-01-05 09:00:00" {
-		t.Fatalf("got %s, want earliest record in month", got.Record.ArchivedAt)
+	if got.Record.ArchivedAt != "2026-01-20 09:00:00" {
+		t.Fatalf("got %s, want latest record in month", got.Record.ArchivedAt)
 	}
-	if got.Record.CurrentTotal != 90000 {
-		t.Fatalf("got total %.2f, want 90000", got.Record.CurrentTotal)
+	if got.Record.CurrentTotal != 180000 {
+		t.Fatalf("got total %.2f, want 180000", got.Record.CurrentTotal)
 	}
 }
 
@@ -101,4 +101,6 @@ func TestBuildTrendChartDataUsesCurrentHoldingsAndKeepsMissingMonthsOnAxis(t *te
 	if !asset.Points[2].Present || asset.Points[2].Value != 65000 {
 		t.Fatalf("March asset point should use current holding amount: %+v", asset.Points[2])
 	}
+	assertClose(t, asset.Points[0].Pct, 60, 0.0001)
+	assertClose(t, asset.Points[2].Pct, 52, 0.0001)
 }
