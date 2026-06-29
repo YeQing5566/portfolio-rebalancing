@@ -1751,7 +1751,8 @@ func (ui *dashboardUI) saveCurrentInvestment() {
 	ui.resultText = FormatResult(result)
 	ui.selectHistory(0)
 	ui.ensureTrendRange()
-	ui.statusText = "本次投资信息已归档到程序目录"
+	ui.statusText = saveArchiveSuccessMessage
+	walk.MsgBox(ui.mw, "保存成功", saveArchiveSuccessMessage, walk.MsgBoxOK|walk.MsgBoxIconInformation)
 }
 
 func (ui *dashboardUI) loadPortfolioConfig() error {

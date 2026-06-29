@@ -478,9 +478,9 @@ func buildTrendChartData(records []InvestmentRecord, selections map[string]bool,
 			point := trendPoint{Month: month}
 			if monthlyRecord, ok := monthly[month]; ok {
 				if name == trendTotalSeries {
-					point.Value = monthlyRecord.Record.AfterTotal
+					point.Value = monthlyRecord.Record.CurrentTotal
 					point.Present = true
-				} else if amount, ok := trendAssetAmount(monthlyRecord.Record, name); ok {
+				} else if amount, ok := trendAssetCurrentAmount(monthlyRecord.Record, name); ok {
 					point.Value = amount
 					point.Present = true
 				}
@@ -580,11 +580,11 @@ func normalizeTrendMonth(value time.Time) time.Time {
 	return time.Date(value.Year(), value.Month(), 1, 0, 0, 0, 0, time.Local)
 }
 
-func trendAssetAmount(record InvestmentRecord, name string) (float64, bool) {
+func trendAssetCurrentAmount(record InvestmentRecord, name string) (float64, bool) {
 	key := strings.ToLower(strings.TrimSpace(name))
 	for _, asset := range record.Assets {
 		if strings.ToLower(strings.TrimSpace(asset.Name)) == key {
-			return asset.AfterAmount, true
+			return asset.BeforeAmount, true
 		}
 	}
 	return 0, false

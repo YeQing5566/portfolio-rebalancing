@@ -5,17 +5,19 @@ import "testing"
 func TestBuildMonthlyTrendRecordsUsesEarliestRecordInMonth(t *testing.T) {
 	records := []InvestmentRecord{
 		{
-			ArchivedAt: "2026-01-20 09:00:00",
-			AfterTotal: 200000,
+			ArchivedAt:   "2026-01-20 09:00:00",
+			CurrentTotal: 180000,
+			AfterTotal:   200000,
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", AfterAmount: 120000},
+				{Name: "资产A", BeforeAmount: 110000, AfterAmount: 120000},
 			},
 		},
 		{
-			ArchivedAt: "2026-01-05 09:00:00",
-			AfterTotal: 100000,
+			ArchivedAt:   "2026-01-05 09:00:00",
+			CurrentTotal: 90000,
+			AfterTotal:   100000,
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", AfterAmount: 60000},
+				{Name: "资产A", BeforeAmount: 55000, AfterAmount: 60000},
 			},
 		},
 	}
@@ -33,25 +35,27 @@ func TestBuildMonthlyTrendRecordsUsesEarliestRecordInMonth(t *testing.T) {
 	if got.Record.ArchivedAt != "2026-01-05 09:00:00" {
 		t.Fatalf("got %s, want earliest record in month", got.Record.ArchivedAt)
 	}
-	if got.Record.AfterTotal != 100000 {
-		t.Fatalf("got total %.2f, want 100000", got.Record.AfterTotal)
+	if got.Record.CurrentTotal != 90000 {
+		t.Fatalf("got total %.2f, want 90000", got.Record.CurrentTotal)
 	}
 }
 
-func TestBuildTrendChartDataKeepsMissingMonthsOnAxis(t *testing.T) {
+func TestBuildTrendChartDataUsesCurrentHoldingsAndKeepsMissingMonthsOnAxis(t *testing.T) {
 	records := []InvestmentRecord{
 		{
-			ArchivedAt: "2026-03-08 09:00:00",
-			AfterTotal: 130000,
+			ArchivedAt:   "2026-03-08 09:00:00",
+			CurrentTotal: 125000,
+			AfterTotal:   130000,
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", AfterAmount: 70000},
+				{Name: "资产A", BeforeAmount: 65000, BeforePct: 52, AfterAmount: 70000, AfterPct: 53.8461538},
 			},
 		},
 		{
-			ArchivedAt: "2026-01-08 09:00:00",
-			AfterTotal: 100000,
+			ArchivedAt:   "2026-01-08 09:00:00",
+			CurrentTotal: 90000,
+			AfterTotal:   100000,
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", AfterAmount: 60000},
+				{Name: "资产A", BeforeAmount: 54000, BeforePct: 60, AfterAmount: 60000, AfterPct: 60},
 			},
 		},
 	}
@@ -77,13 +81,24 @@ func TestBuildTrendChartDataKeepsMissingMonthsOnAxis(t *testing.T) {
 	if total.Name != trendTotalSeries {
 		t.Fatalf("first series = %s, want %s", total.Name, trendTotalSeries)
 	}
-	if !total.Points[0].Present || total.Points[0].Value != 100000 {
+	if !total.Points[0].Present || total.Points[0].Value != 90000 {
 		t.Fatalf("January total point not populated correctly: %+v", total.Points[0])
 	}
 	if total.Points[1].Present {
 		t.Fatalf("February should reserve axis space without a point: %+v", total.Points[1])
 	}
-	if !total.Points[2].Present || total.Points[2].Value != 130000 {
+	if !total.Points[2].Present || total.Points[2].Value != 125000 {
 		t.Fatalf("March total point not populated correctly: %+v", total.Points[2])
+	}
+
+	asset := data.Series[1]
+	if asset.Name != "资产A" {
+		t.Fatalf("second series = %s, want 资产A", asset.Name)
+	}
+	if !asset.Points[0].Present || asset.Points[0].Value != 54000 {
+		t.Fatalf("January asset point should use current holding amount: %+v", asset.Points[0])
+	}
+	if !asset.Points[2].Present || asset.Points[2].Value != 65000 {
+		t.Fatalf("March asset point should use current holding amount: %+v", asset.Points[2])
 	}
 }

@@ -620,7 +620,8 @@ func buildActionBar() Widget {
 						walk.MsgBox(mainWindow, "保存失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 						return
 					}
-					statusBarItem.SetText("本次投资信息已归档到程序目录")
+					statusBarItem.SetText(saveArchiveSuccessMessage)
+					walk.MsgBox(mainWindow, "保存成功", saveArchiveSuccessMessage, walk.MsgBoxOK|walk.MsgBoxIconInformation)
 				},
 			},
 			PushButton{

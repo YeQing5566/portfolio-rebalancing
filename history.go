@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	recordsFileName    = "investment_records.json"
-	recordsFileVersion = 1
-	archiveTimeFmt     = "2006-01-02 15:04:05"
-	jsonFileFilter     = "JSON 文件 (*.json)|*.json|所有文件 (*.*)|*.*"
+	recordsFileName           = "investment_records.json"
+	recordsFileVersion        = 1
+	archiveTimeFmt            = "2006-01-02 15:04:05"
+	jsonFileFilter            = "JSON 文件 (*.json)|*.json|所有文件 (*.*)|*.*"
+	saveArchiveSuccessMessage = "保存成功，可在历史投资记录中查看"
 )
 
 type InvestmentRecordsFile struct {
