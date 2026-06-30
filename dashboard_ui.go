@@ -23,6 +23,9 @@ const (
 	dashPageYield
 )
 
+// rsrc assigns the manifest ID first, then the icon group ID.
+const appIconResourceID = 2
+
 const (
 	dashActionButton = "button"
 	dashActionNav    = "nav"
@@ -37,12 +40,14 @@ type dashboardUI struct {
 	canvas      *walk.CustomWidget
 	editorLayer *walk.Composite
 	editor      *walk.LineEdit
+	appIcon     *walk.Icon
 
 	fontTiny  *walk.Font
 	fontSmall *walk.Font
 	fontMono  *walk.Font
 	fontBody  *walk.Font
 	fontBold  *walk.Font
+	fontBrand *walk.Font
 	fontTitle *walk.Font
 	fontBig   *walk.Font
 	fontHuge  *walk.Font
@@ -249,6 +254,12 @@ func runDashboardApp() {
 	if err := window.Create(); err != nil {
 		showStartupError(err)
 	}
+	if err := ui.applyWindowIcon(); err != nil {
+		ui.statusText = "程序图标加载失败：" + err.Error()
+	}
+	ui.mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
+		ui.disposeWindowIcon()
+	})
 	mainWindow = ui.mw
 	dashboard = ui
 	ui.installBorderlessWindow()
@@ -272,9 +283,36 @@ func (ui *dashboardUI) initFonts() {
 	ui.fontMono, _ = walk.NewFont("NSimSun", 10, 0)
 	ui.fontBody, _ = walk.NewFont("Microsoft YaHei UI", 11, 0)
 	ui.fontBold, _ = walk.NewFont("Microsoft YaHei UI", 11, walk.FontBold)
+	ui.fontBrand, _ = walk.NewFont("Microsoft YaHei UI", 13, walk.FontBold)
 	ui.fontTitle, _ = walk.NewFont("Microsoft YaHei UI", 17, walk.FontBold)
 	ui.fontBig, _ = walk.NewFont("Microsoft YaHei UI", 23, 0)
 	ui.fontHuge, _ = walk.NewFont("Microsoft YaHei UI", 28, 0)
+}
+
+func (ui *dashboardUI) applyWindowIcon() error {
+	if ui.mw == nil {
+		return nil
+	}
+	icon, err := walk.NewIconFromResourceId(appIconResourceID)
+	if err != nil {
+		return err
+	}
+	if err := ui.mw.SetIcon(icon); err != nil {
+		icon.Dispose()
+		return err
+	}
+	if ui.appIcon != nil {
+		ui.appIcon.Dispose()
+	}
+	ui.appIcon = icon
+	return nil
+}
+
+func (ui *dashboardUI) disposeWindowIcon() {
+	if ui.appIcon != nil {
+		ui.appIcon.Dispose()
+		ui.appIcon = nil
+	}
 }
 
 func (ui *dashboardUI) installBorderlessWindow() {
@@ -405,19 +443,74 @@ func (ui *dashboardUI) paintChrome(canvas *walk.Canvas, bounds walk.Rectangle) {
 	fill(canvas, dashColors.sidebar, sidebar)
 	drawLine(canvas, dashColors.line, sidebar.X+sidebar.Width, 0, sidebar.X+sidebar.Width, bounds.Height, 1)
 
-	drawText(canvas, "●", ui.fontBig, dashColors.accent, rect(28, 30, 24, 28), walk.TextLeft|walk.TextVCenter)
-	drawText(canvas, "Rebalance", ui.fontTitle, dashColors.text, rect(58, 27, 158, 30), walk.TextLeft|walk.TextVCenter)
-	drawText(canvas, "投资组合再平衡助手", ui.fontSmall, dashColors.muted, rect(28, 64, 188, 20), walk.TextLeft|walk.TextVCenter)
+	ui.drawHeaderBrand(canvas, rect(22, 26, 204, 52))
+	drawText(canvas, "投资组合再平衡助手", ui.fontSmall, dashColors.muted, rect(22, 94, 204, 20), walk.TextCenter|walk.TextVCenter)
+	drawText(canvas, "记录数据保存在本机", ui.fontSmall, dashColors.muted, rect(22, 120, 204, 20), walk.TextCenter|walk.TextVCenter)
 
-	ui.drawInfoCard(canvas, rect(22, 112, 204, 72))
-	ui.drawNav(canvas, 22, 216, "平衡买入计算", "nav-calc", dashPageCalc)
-	ui.drawNav(canvas, 22, 280, "历史投资记录", "nav-history", dashPageHistory)
-	ui.drawNav(canvas, 22, 344, "资产趋势图表", "nav-trend", dashPageTrend)
-	ui.drawNav(canvas, 22, 408, "收益数据测算", "nav-yield", dashPageYield)
+	ui.drawNav(canvas, 22, 168, "平衡买入计算", "nav-calc", dashPageCalc)
+	ui.drawNav(canvas, 22, 232, "历史投资记录", "nav-history", dashPageHistory)
+	ui.drawNav(canvas, 22, 296, "资产趋势图表", "nav-trend", dashPageTrend)
+	ui.drawNav(canvas, 22, 360, "收益数据测算", "nav-yield", dashPageYield)
 
 	ui.drawWindowButton(canvas, rect(bounds.Width-128, 18, 28, 28), "win-min")
 	ui.drawWindowButton(canvas, rect(bounds.Width-88, 18, 28, 28), "win-max")
 	ui.drawWindowButton(canvas, rect(bounds.Width-48, 18, 28, 28), "win-close")
+}
+
+func (ui *dashboardUI) drawHeaderBrand(canvas *walk.Canvas, r walk.Rectangle) {
+	first := "Portfolio"
+	second := "Rebalancing"
+	fonts := []*walk.Font{ui.fontBrand, ui.fontBold, ui.fontSmall, ui.fontTiny}
+	font := ui.fontTiny
+	padX := 5
+	firstInset := 5
+	gap := 2
+	firstW, secondW, textH := 0, 0, 18
+	for _, candidate := range fonts {
+		if candidate == nil {
+			continue
+		}
+		candidatePadX := 5
+		if candidate == ui.fontTiny {
+			candidatePadX = 4
+		}
+		firstSize := measureTextSize(canvas, first, candidate)
+		secondSize := measureTextSize(canvas, second, candidate)
+		totalW := candidatePadX + firstSize.Width + gap + secondSize.Width + candidatePadX*2
+		if totalW <= r.Width || font == nil {
+			font = candidate
+			padX = candidatePadX
+			firstInset = candidatePadX
+			firstW = firstSize.Width
+			secondW = secondSize.Width
+			textH = maxInt(firstSize.Height, secondSize.Height)
+			if totalW <= r.Width {
+				break
+			}
+		}
+	}
+	if font == nil {
+		font = ui.fontBold
+	}
+	if firstW == 0 {
+		firstW = measureTextWidth(canvas, first, font)
+	}
+	if secondW == 0 {
+		secondW = measureTextWidth(canvas, second, font)
+	}
+	if textH == 0 {
+		textH = 18
+	}
+
+	blockH := clampInt(textH+6, 22, minInt(32, r.Height))
+	blockW := minInt(r.Width, secondW+padX*2)
+	textY := r.Y + (r.Height-blockH)/2
+	blockY := clampInt(textY+2, r.Y, r.Y+r.Height-blockH)
+	block := rect(r.X+r.Width-blockW, blockY, blockW, blockH)
+	firstX := r.X + firstInset
+	drawText(canvas, first, font, dashColors.white, rect(firstX, textY, maxInt(0, block.X-firstX-gap), block.Height), walk.TextLeft|walk.TextVCenter)
+	roundFill(canvas, dashColors.accent, block, 4)
+	drawText(canvas, second, font, walk.RGB(0, 0, 0), inset(rect(block.X, textY, block.Width, block.Height), padX, 0), walk.TextCenter|walk.TextVCenter)
 }
 
 func (ui *dashboardUI) drawWindowFrame(canvas *walk.Canvas, bounds walk.Rectangle) {
@@ -447,15 +540,6 @@ func (ui *dashboardUI) toggleMaximize() {
 	ui.regionWidth = 0
 	ui.regionHeight = 0
 	ui.invalidate()
-}
-
-func (ui *dashboardUI) drawInfoCard(canvas *walk.Canvas, r walk.Rectangle) {
-	roundFill(canvas, dashColors.panel, r, dashStyle.cardRadius)
-	drawRoundStroke(canvas, dashColors.line, r, dashStyle.cardRadius, 1)
-	roundFill(canvas, walk.RGB(54, 37, 12), rect(r.X+14, r.Y+17, 38, 38), 19)
-	drawText(canvas, "本", ui.fontBold, dashColors.accent, rect(r.X+14, r.Y+17, 38, 38), walk.TextCenter|walk.TextVCenter)
-	drawText(canvas, "本地数据", ui.fontBold, dashColors.text, rect(r.X+66, r.Y+17, 112, 20), walk.TextLeft|walk.TextVCenter)
-	drawText(canvas, "记录保存在本机", ui.fontSmall, dashColors.muted, rect(r.X+66, r.Y+40, 126, 18), walk.TextLeft|walk.TextVCenter)
 }
 
 func (ui *dashboardUI) drawNav(canvas *walk.Canvas, x, y int, title, key string, page int) {
@@ -2675,6 +2759,28 @@ func drawText(canvas *walk.Canvas, text string, font *walk.Font, color walk.Colo
 		r.Y += 2
 	}
 	_ = canvas.DrawTextPixels(text, font, color, r, format)
+}
+
+func measureTextWidth(canvas *walk.Canvas, text string, font *walk.Font) int {
+	if canvas == nil || font == nil || text == "" {
+		return 0
+	}
+	measured, _, err := canvas.MeasureTextPixels(text, font, walk.Rectangle{Width: 999999}, walk.TextCalcRect)
+	if err != nil {
+		return 0
+	}
+	return measured.Width
+}
+
+func measureTextSize(canvas *walk.Canvas, text string, font *walk.Font) walk.Size {
+	if canvas == nil || font == nil || text == "" {
+		return walk.Size{}
+	}
+	measured, _, err := canvas.MeasureTextPixels(text, font, walk.Rectangle{Width: 999999}, walk.TextCalcRect)
+	if err != nil {
+		return walk.Size{}
+	}
+	return walk.Size{Width: measured.Width, Height: measured.Height}
 }
 
 func solidBrush(color walk.Color) *walk.SolidColorBrush {
