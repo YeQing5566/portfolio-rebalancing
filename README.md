@@ -17,10 +17,10 @@
 
 ## 界面
 
-<img width="1359" height="858" alt="image" src="https://github.com/user-attachments/assets/27c1520f-bd08-4eca-9c5c-01e96b38666b" />
-<img width="1359" height="858" alt="image" src="https://github.com/user-attachments/assets/9d041906-ec8d-4030-a101-0f9b5d6ed0ab" />
-<img width="1359" height="858" alt="image" src="https://github.com/user-attachments/assets/6aa8b255-5f58-494e-801b-33ae8810cb9b" />
-<img width="1359" height="858" alt="image" src="https://github.com/user-attachments/assets/f6d3251c-ce6f-4fdc-8553-f4fd11383ec1" />
+<img width="1357" height="858" alt="image" src="https://github.com/user-attachments/assets/d63635a5-fa83-4c89-b9ac-ec877b1d551e" />
+<img width="1356" height="850" alt="image" src="https://github.com/user-attachments/assets/ace31576-2065-4111-aeb8-bfaa4f71c951" />
+<img width="1355" height="854" alt="image" src="https://github.com/user-attachments/assets/92ed6d45-5b17-4fa9-b3d6-8cffa800ca68" />
+<img width="1354" height="852" alt="image" src="https://github.com/user-attachments/assets/4b76573b-e3a4-4d64-a19a-4f7ecac13ad2" />
 
 ## 构建
 
