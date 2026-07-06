@@ -17,10 +17,7 @@
 
 ## 界面
 
-<img width="1357" height="858" alt="image" src="https://github.com/user-attachments/assets/d63635a5-fa83-4c89-b9ac-ec877b1d551e" />
-<img width="1356" height="850" alt="image" src="https://github.com/user-attachments/assets/ace31576-2065-4111-aeb8-bfaa4f71c951" />
-<img width="1355" height="854" alt="image" src="https://github.com/user-attachments/assets/92ed6d45-5b17-4fa9-b3d6-8cffa800ca68" />
-<img width="1354" height="852" alt="image" src="https://github.com/user-attachments/assets/4b76573b-e3a4-4d64-a19a-4f7ecac13ad2" />
+<img width="1367" height="859" alt="image" src="https://github.com/user-attachments/assets/a3984088-26ef-495e-a6ff-c062b8ad7fb3" />
 
 ## 构建
 
