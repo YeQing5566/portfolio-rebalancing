@@ -22,4 +22,4 @@
 ## 构建
 
 ```powershell
-go build -o .\portfolio-rebalancing.exe .
+go build -ldflags="-H windowsgui" -o ./rebalance.exe .
