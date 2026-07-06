@@ -240,6 +240,49 @@ func TestRecalculateInvestmentRecordUsesActualBuyTotalAsInvestment(t *testing.T)
 	assertClose(t, record.Assets[1].AfterPct, 52.5925926, 0.0001)
 }
 
+func TestFinalizedSellRecordFiltersZeroAmounts(t *testing.T) {
+	record := InvestmentRecord{
+		RecordType: recordTypeSell,
+		ArchivedAt: "2026-05-29 11:41:16",
+		Assets: []InvestmentAssetRecord{
+			{Name: "资产A", SellAmount: 1200},
+			{Name: "资产B", SellAmount: 0},
+			{Name: "资产C", SellAmount: 800},
+		},
+	}
+
+	finalized, err := finalizedSellRecord(record)
+	if err != nil {
+		t.Fatalf("finalizedSellRecord returned error: %v", err)
+	}
+	if !isSellRecord(finalized) {
+		t.Fatal("finalized record should be a sell record")
+	}
+	if len(finalized.Assets) != 2 {
+		t.Fatalf("expected two non-zero sell assets, got %d", len(finalized.Assets))
+	}
+	assertClose(t, finalized.SellAmount, 2000, 0.01)
+	assertClose(t, finalized.InvestAmount, 0, 0.01)
+	if finalized.Assets[0].Name != "资产A" || finalized.Assets[1].Name != "资产C" {
+		t.Fatalf("unexpected finalized assets: %+v", finalized.Assets)
+	}
+}
+
+func TestFinalizedSellRecordRejectsZeroTotal(t *testing.T) {
+	record := InvestmentRecord{
+		RecordType: recordTypeSell,
+		ArchivedAt: "2026-05-29 11:41:16",
+		Assets: []InvestmentAssetRecord{
+			{Name: "资产A", SellAmount: 0},
+		},
+	}
+
+	_, err := finalizedSellRecord(record)
+	if err == nil || err.Error() != "没有填写卖出金额，不生成卖出记录" {
+		t.Fatalf("expected zero sell warning, got %v", err)
+	}
+}
+
 func TestFormatResultAlignsSuggestedBuyColumns(t *testing.T) {
 	result := &PortfolioResult{
 		Assets: []*AssetResult{

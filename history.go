@@ -5,13 +5,9 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/lxn/walk"
-	. "github.com/lxn/walk/declarative"
 )
 
 const (
@@ -20,6 +16,7 @@ const (
 	archiveTimeFmt            = "2006-01-02 15:04:05"
 	jsonFileFilter            = "JSON 文件 (*.json)|*.json|所有文件 (*.*)|*.*"
 	saveArchiveSuccessMessage = "保存成功，可在历史投资记录中查看"
+	recordTypeSell            = "sell"
 )
 
 type InvestmentRecordsFile struct {
@@ -29,9 +26,11 @@ type InvestmentRecordsFile struct {
 
 type InvestmentRecord struct {
 	ID            string                  `json:"id"`
+	RecordType    string                  `json:"record_type,omitempty"`
 	ArchivedAt    string                  `json:"archived_at"`
 	Notes         string                  `json:"notes,omitempty"`
 	InvestAmount  float64                 `json:"invest_amount"`
+	SellAmount    float64                 `json:"sell_amount,omitempty"`
 	CurrentTotal  float64                 `json:"current_total"`
 	AfterTotal    float64                 `json:"after_total"`
 	AllocatedCash float64                 `json:"allocated_cash"`
@@ -45,6 +44,7 @@ type InvestmentAssetRecord struct {
 	BeforeAmount float64 `json:"before_amount"`
 	BeforePct    float64 `json:"before_pct"`
 	BuyAmount    float64 `json:"buy_amount"`
+	SellAmount   float64 `json:"sell_amount,omitempty"`
 	AfterAmount  float64 `json:"after_amount"`
 	AfterPct     float64 `json:"after_pct"`
 	LowLine      float64 `json:"low_line"`
@@ -52,411 +52,12 @@ type InvestmentAssetRecord struct {
 	Status       string  `json:"status"`
 }
 
-type HistoryListModel struct {
-	walk.TableModelBase
-}
-
-func (m *HistoryListModel) RowCount() int {
-	return len(investmentRecords)
-}
-
-func (m *HistoryListModel) Value(row, col int) interface{} {
-	record := investmentRecords[row]
-	switch col {
-	case 0:
-		return record.ArchivedAt
-	case 1:
-		return formatMoney(record.AfterTotal) + " 元"
-	case 2:
-		return formatMoney(record.InvestAmount) + " 元"
-	default:
-		return ""
-	}
-}
-
-type HistoryAssetModel struct {
-	walk.TableModelBase
-}
-
-func (m *HistoryAssetModel) RowCount() int {
-	return len(selectedHistoryDraft.Assets)
-}
-
-func (m *HistoryAssetModel) Value(row, col int) interface{} {
-	asset := selectedHistoryDraft.Assets[row]
-	switch col {
-	case 0:
-		return asset.Name
-	case 1:
-		return formatPercent(asset.TargetPct)
-	case 2:
-		return formatMoney(asset.BeforeAmount)
-	case 3:
-		return formatPercent(asset.BeforePct)
-	case 4:
-		return formatMoney(asset.BuyAmount)
-	case 5:
-		return formatMoney(asset.AfterAmount)
-	case 6:
-		return formatPercent(asset.AfterPct)
-	case 7:
-		return asset.Status
-	default:
-		return ""
-	}
-}
-
 var (
 	investmentRecords    []InvestmentRecord
-	historyListModel     = &HistoryListModel{}
-	historyAssetModel    = &HistoryAssetModel{}
-	historyTable         *walk.TableView
-	historyAssetTable    *walk.TableView
-	historyDetailPanel   *walk.Composite
-	historyArchiveEdit   *walk.LineEdit
-	historyNotesEdit     *walk.LineEdit
-	historyInvestEdit    *walk.NumberEdit
-	historySummaryLabel  *walk.Label
-	historyFileLabel     *walk.Label
-	historyAssetNameEdit *walk.LineEdit
-	historyTargetEdit    *walk.NumberEdit
-	historyBeforeEdit    *walk.NumberEdit
-	historyBuyEdit       *walk.NumberEdit
 	selectedHistoryIndex = -1
 	selectedAssetIndex   = -1
 	selectedHistoryDraft InvestmentRecord
-	loadingHistoryEditor bool
 )
-
-func buildHistoryPage() Widget {
-	return Composite{
-		Background: windowBackground,
-		Layout: HBox{
-			MarginsZero: true,
-			Spacing:     10,
-		},
-		Children: []Widget{
-			Composite{
-				MinSize:    Size{Width: 350},
-				MaxSize:    Size{Width: 400, Height: 2000},
-				Background: panelBackground,
-				Border:     true,
-				Layout: VBox{
-					Margins: Margins{Left: 14, Top: 14, Right: 14, Bottom: 12},
-					Spacing: 8,
-				},
-				Children: []Widget{
-					Label{
-						Text:      "历史投资记录",
-						TextColor: defaultTextColor,
-						Font:      Font{Family: "Microsoft YaHei UI", PointSize: 12, Bold: true},
-					},
-					Label{
-						Text:      "选择一条记录，在右侧查看、调整或删除。",
-						TextColor: mutedTextColor,
-					},
-					TableView{
-						AssignTo:                    &historyTable,
-						Model:                       historyListModel,
-						Background:                  tableBackground,
-						AlternatingRowBG:            true,
-						SelectionHiddenWithoutFocus: false,
-						NotSortableByHeaderClick:    true,
-						LastColumnStretched:         true,
-						CustomRowHeight:             30,
-						StretchFactor:               1,
-						Columns: []TableViewColumn{
-							{Title: "归档时间", Width: 145},
-							{Title: "投资总额", Width: 105, Alignment: AlignFar},
-							{Title: "真实投入", Width: 100, Alignment: AlignFar},
-						},
-						StyleCell:             styleHistoryListCell,
-						OnCurrentIndexChanged: showSelectedHistoryRecord,
-						OnItemActivated:       showSelectedHistoryRecord,
-					},
-					Label{
-						AssignTo:  &historyFileLabel,
-						Text:      "记录文件：",
-						TextColor: mutedTextColor,
-						Font:      Font{Family: "Microsoft YaHei UI", PointSize: 8},
-					},
-					Composite{
-						Background: panelBackground,
-						Layout:     HBox{MarginsZero: true, Spacing: 8},
-						Children: []Widget{
-							PushButton{
-								Text:    "导出",
-								MinSize: Size{Width: 96, Height: 30},
-								OnClicked: func() {
-									exportInvestmentRecords()
-								},
-							},
-							PushButton{
-								Text:    "导入",
-								MinSize: Size{Width: 96, Height: 30},
-								OnClicked: func() {
-									importInvestmentRecords()
-								},
-							},
-							HSpacer{},
-						},
-					},
-				},
-			},
-			Composite{
-				StretchFactor: 3,
-				Background:    panelBackground,
-				Border:        true,
-				Layout: VBox{
-					Margins: Margins{Left: 14, Top: 14, Right: 14, Bottom: 12},
-					Spacing: 9,
-				},
-				Children: []Widget{
-					Composite{
-						Background: panelBackground,
-						Layout: HBox{
-							MarginsZero: true,
-							Spacing:     8,
-						},
-						Children: []Widget{
-							Label{
-								Text:      "投资记录详情",
-								TextColor: defaultTextColor,
-								Font:      Font{Family: "Microsoft YaHei UI", PointSize: 12, Bold: true},
-							},
-							Label{
-								Text:      "资产明细和备注可直接维护",
-								TextColor: mutedTextColor,
-							},
-							HSpacer{},
-						},
-					},
-					Composite{
-						AssignTo:   &historyDetailPanel,
-						Enabled:    false,
-						Background: panelBackground,
-						Layout: VBox{
-							MarginsZero: true,
-							Spacing:     9,
-						},
-						Children: []Widget{
-							Composite{
-								Background: panelBackground,
-								Layout: Grid{
-									Columns:     4,
-									MarginsZero: true,
-									Spacing:     8,
-								},
-								Children: []Widget{
-									Label{Text: "归档时间", TextColor: mutedTextColor},
-									LineEdit{
-										AssignTo:          &historyArchiveEdit,
-										ToolTipText:       "格式：2026-06-18 15:30:00",
-										MinSize:           Size{Width: 190},
-										MaxSize:           Size{Width: 220, Height: 100},
-										Background:        fieldBackground,
-										TextColor:         defaultTextColor,
-										OnEditingFinished: syncHistoryRecordFields,
-									},
-									Label{Text: "真实投入", TextColor: mutedTextColor},
-									Composite{
-										Background: panelBackground,
-										Layout:     HBox{MarginsZero: true, Spacing: 6},
-										Children: []Widget{
-											NumberEdit{
-												AssignTo:           &historyInvestEdit,
-												Enabled:            false,
-												Decimals:           2,
-												Increment:          500,
-												MinValue:           0,
-												MaxValue:           1_000_000_000,
-												SpinButtonsVisible: false,
-												MinSize:            Size{Width: 130},
-												MaxSize:            Size{Width: 160, Height: 100},
-												Background:         fieldBackground,
-												TextColor:          defaultTextColor,
-												OnValueChanged:     syncHistoryRecordFields,
-											},
-											Label{Text: "元", TextColor: mutedTextColor},
-										},
-									},
-									Label{Text: "备注", TextColor: mutedTextColor},
-									LineEdit{
-										AssignTo:      &historyNotesEdit,
-										ColumnSpan:    3,
-										CueBanner:     "可填写本次投资说明",
-										Background:    fieldBackground,
-										TextColor:     defaultTextColor,
-										OnTextChanged: syncHistoryRecordFields,
-									},
-								},
-							},
-							Label{
-								AssignTo:  &historySummaryLabel,
-								Text:      "请选择左侧记录",
-								TextColor: accentColor,
-								Font:      Font{Family: "Microsoft YaHei UI", PointSize: 10, Bold: true},
-							},
-							TableView{
-								AssignTo:                    &historyAssetTable,
-								Model:                       historyAssetModel,
-								Background:                  tableBackground,
-								AlternatingRowBG:            true,
-								SelectionHiddenWithoutFocus: false,
-								NotSortableByHeaderClick:    true,
-								LastColumnStretched:         true,
-								CustomRowHeight:             30,
-								StretchFactor:               1,
-								Columns: []TableViewColumn{
-									{Title: "资产", Width: 150},
-									{Title: "目标", Width: 70},
-									{Title: "买入前金额", Width: 115},
-									{Title: "买入前仓位", Width: 90},
-									{Title: "买入金额", Width: 105},
-									{Title: "买入后金额", Width: 115},
-									{Title: "买入后仓位", Width: 90},
-									{Title: "状态", Width: 110},
-								},
-								StyleCell:             styleHistoryAssetCell,
-								OnCurrentIndexChanged: loadSelectedHistoryAsset,
-								OnItemActivated:       loadSelectedHistoryAsset,
-							},
-							Composite{
-								Background: fieldBackground,
-								Border:     true,
-								Layout: HBox{
-									Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8},
-									Spacing: 8,
-								},
-								Children: []Widget{
-									Label{Text: "修改资产", TextColor: accentColor, Font: Font{Family: "Microsoft YaHei UI", PointSize: 9, Bold: true}},
-									LineEdit{
-										AssignTo:      &historyAssetNameEdit,
-										CueBanner:     "资产名称",
-										MinSize:       Size{Width: 150},
-										StretchFactor: 2,
-										Background:    resultBackground,
-										TextColor:     defaultTextColor,
-										OnTextChanged: syncHistoryAssetEditor,
-									},
-									NumberEdit{
-										AssignTo:           &historyTargetEdit,
-										Decimals:           2,
-										MinValue:           0,
-										MaxValue:           100,
-										SpinButtonsVisible: false,
-										Suffix:             " % 目标",
-										MinSize:            Size{Width: 125},
-										Background:         resultBackground,
-										TextColor:          defaultTextColor,
-										OnValueChanged:     syncHistoryAssetEditor,
-									},
-									NumberEdit{
-										AssignTo:           &historyBeforeEdit,
-										Decimals:           2,
-										MinValue:           0,
-										MaxValue:           1_000_000_000,
-										SpinButtonsVisible: false,
-										Suffix:             " 元 买入前",
-										MinSize:            Size{Width: 165},
-										Background:         resultBackground,
-										TextColor:          defaultTextColor,
-										OnValueChanged:     syncHistoryAssetEditor,
-									},
-									NumberEdit{
-										AssignTo:           &historyBuyEdit,
-										Decimals:           2,
-										MinValue:           0,
-										MaxValue:           1_000_000_000,
-										SpinButtonsVisible: false,
-										Suffix:             " 元 买入",
-										MinSize:            Size{Width: 150},
-										Background:         resultBackground,
-										TextColor:          defaultTextColor,
-										OnValueChanged:     syncHistoryAssetEditor,
-									},
-								},
-							},
-							Composite{
-								Background: panelBackground,
-								Layout:     HBox{MarginsZero: true, Spacing: 8},
-								Children: []Widget{
-									PushButton{
-										Text:    "读取记录",
-										MinSize: Size{Width: 112, Height: 32},
-										OnClicked: func() {
-											loadSelectedHistoryToCalculator()
-										},
-									},
-									PushButton{
-										Text:    "删除该记录",
-										MinSize: Size{Width: 112, Height: 32},
-										OnClicked: func() {
-											deleteSelectedHistoryRecord()
-										},
-									},
-									HSpacer{},
-									Label{
-										Text:      "修改后会自动保存，金额、仓位与提醒会自动重算",
-										TextColor: mutedTextColor,
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-func styleHistoryListCell(style *walk.CellStyle) {
-	styleDarkTableCell(style, currentTableIndex(historyTable))
-	switch style.Col() {
-	case 1:
-		style.TextColor = accentColor
-	case 2:
-		style.TextColor = secondaryColor
-	}
-}
-
-func styleHistoryAssetCell(style *walk.CellStyle) {
-	styleDarkTableCell(style, currentTableIndex(historyAssetTable))
-	row := style.Row()
-	if row < 0 || row >= len(selectedHistoryDraft.Assets) {
-		return
-	}
-	asset := selectedHistoryDraft.Assets[row]
-	switch style.Col() {
-	case 1, 6:
-		style.TextColor = accentColor
-	case 4:
-		if asset.BuyAmount > 0 {
-			style.TextColor = accentColor
-		} else {
-			style.TextColor = mutedTextColor
-		}
-	case 7:
-		style.TextColor = statusTextColor(asset.Status)
-	}
-}
-
-func archiveCurrentInvestment() error {
-	result, err := CalculatePortfolio(investAmountEdit.Value(), assetModel.ItemsCopy())
-	if err != nil {
-		return err
-	}
-
-	record := recordFromResult(result)
-	if err := appendInvestmentRecord(record); err != nil {
-		return err
-	}
-
-	resultEdit.SetText(FormatResult(result))
-	historyListModel.PublishRowsReset()
-	refreshTrendView()
-	return nil
-}
 
 func recordFromResult(result *PortfolioResult) InvestmentRecord {
 	now := time.Now()
@@ -521,10 +122,68 @@ func recordFromResultWithActualBuys(result *PortfolioResult, buyAmounts []float6
 	return record, nil
 }
 
+func sellRecordFromAssets(assets []AssetInput, soldAt time.Time) InvestmentRecord {
+	record := InvestmentRecord{
+		ID:         fmt.Sprintf("%d", soldAt.UnixNano()),
+		RecordType: recordTypeSell,
+		ArchivedAt: soldAt.Format(archiveTimeFmt),
+		Assets:     make([]InvestmentAssetRecord, 0, len(assets)),
+	}
+	for _, asset := range assets {
+		name := strings.TrimSpace(asset.Name)
+		if name == "" {
+			continue
+		}
+		record.Assets = append(record.Assets, InvestmentAssetRecord{Name: name})
+	}
+	recalculateInvestmentRecord(&record)
+	return record
+}
+
+func finalizedSellRecord(record InvestmentRecord) (InvestmentRecord, error) {
+	record.RecordType = recordTypeSell
+	archivedAt := strings.TrimSpace(record.ArchivedAt)
+	parsed, err := time.ParseInLocation(archiveTimeFmt, archivedAt, time.Local)
+	if err != nil {
+		return InvestmentRecord{}, fmt.Errorf("卖出时间格式应为：2026-05-29 11:41:16")
+	}
+	record.ArchivedAt = parsed.Format(archiveTimeFmt)
+	if strings.TrimSpace(record.ID) == "" {
+		record.ID = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+
+	filtered := make([]InvestmentAssetRecord, 0, len(record.Assets))
+	for i, asset := range record.Assets {
+		amount := roundMoney(asset.SellAmount)
+		if amount <= moneyEpsilon {
+			continue
+		}
+		name := strings.TrimSpace(asset.Name)
+		if name == "" {
+			return InvestmentRecord{}, fmt.Errorf("第 %d 项资产名称不能为空", i+1)
+		}
+		filtered = append(filtered, InvestmentAssetRecord{
+			Name:       name,
+			SellAmount: amount,
+		})
+	}
+	record.Assets = filtered
+	recalculateInvestmentRecord(&record)
+	if record.SellAmount <= moneyEpsilon {
+		return InvestmentRecord{}, fmt.Errorf("没有填写卖出金额，不生成卖出记录")
+	}
+	if err := validateInvestmentRecord(record); err != nil {
+		return InvestmentRecord{}, err
+	}
+	return record, nil
+}
+
 func appendInvestmentRecord(record InvestmentRecord) error {
-	investmentRecords = append([]InvestmentRecord{cloneInvestmentRecord(record)}, investmentRecords...)
+	previous := cloneInvestmentRecords(investmentRecords)
+	investmentRecords = append(investmentRecords, cloneInvestmentRecord(record))
+	sortInvestmentRecords(investmentRecords)
 	if err := saveInvestmentRecords(); err != nil {
-		investmentRecords = investmentRecords[1:]
+		investmentRecords = previous
 		return err
 	}
 	return nil
@@ -539,15 +198,10 @@ func loadInvestmentRecords() error {
 	if err != nil {
 		return err
 	}
-	if historyFileLabel != nil {
-		historyFileLabel.SetText("记录文件：" + path)
-	}
 
 	records, err := readInvestmentRecordsFile(path)
 	if os.IsNotExist(err) {
 		investmentRecords = nil
-		historyListModel.PublishRowsReset()
-		refreshTrendView()
 		return nil
 	}
 	if err != nil {
@@ -555,8 +209,6 @@ func loadInvestmentRecords() error {
 	}
 
 	investmentRecords = records
-	historyListModel.PublishRowsReset()
-	refreshTrendView()
 	return nil
 }
 
@@ -607,222 +259,35 @@ func sortInvestmentRecords(records []InvestmentRecord) {
 	})
 }
 
-func exportInvestmentRecords() {
-	basePath, err := recordsFilePath()
-	if err != nil {
-		walk.MsgBox(mainWindow, "导出失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
-	}
-
-	fileName := "investment_records_export_" + time.Now().Format("20060102_150405") + ".json"
-	dlg := walk.FileDialog{
-		Title:          "导出历史投资记录",
-		FilePath:       fileName,
-		Filter:         jsonFileFilter,
-		FilterIndex:    1,
-		InitialDirPath: filepath.Dir(basePath),
-	}
-	accepted, err := dlg.ShowSave(mainWindow)
-	if err != nil {
-		walk.MsgBox(mainWindow, "导出失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
-	}
-	if !accepted {
-		return
-	}
-
-	targetPath := strings.TrimSpace(dlg.FilePath)
-	if strings.EqualFold(filepath.Ext(targetPath), "") {
-		targetPath += ".json"
-	}
-	if _, err := os.Stat(targetPath); err == nil {
-		if walk.MsgBox(
-			mainWindow,
-			"覆盖导出文件",
-			"导出文件已存在，是否覆盖？\r\n"+targetPath,
-			walk.MsgBoxYesNo|walk.MsgBoxIconQuestion,
-		) != walk.DlgCmdYes {
-			return
-		}
-	} else if !os.IsNotExist(err) {
-		walk.MsgBox(mainWindow, "导出失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
-	}
-
-	if err := writeInvestmentRecordsFile(targetPath, investmentRecords); err != nil {
-		walk.MsgBox(mainWindow, "导出失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
-	}
-	statusBarItem.SetText("历史投资记录已导出：" + targetPath)
-	walk.MsgBox(mainWindow, "导出完成", "历史投资记录已导出到：\r\n"+targetPath, walk.MsgBoxOK|walk.MsgBoxIconInformation)
-}
-
-func importInvestmentRecords() {
-	basePath, err := recordsFilePath()
-	if err != nil {
-		walk.MsgBox(mainWindow, "导入失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
-	}
-
-	dlg := walk.FileDialog{
-		Title:          "选择要导入的历史记录 JSON 文件",
-		Filter:         jsonFileFilter,
-		FilterIndex:    1,
-		InitialDirPath: filepath.Dir(basePath),
-	}
-	accepted, err := dlg.ShowOpen(mainWindow)
-	if err != nil {
-		walk.MsgBox(mainWindow, "导入失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
-	}
-	if !accepted {
-		return
-	}
-
-	records, err := readInvestmentRecordsFile(dlg.FilePath)
-	if err != nil {
-		walk.MsgBox(mainWindow, "导入失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
-	}
-
-	message := fmt.Sprintf(
-		"将从以下文件导入 %d 条历史记录，并覆盖当前记录文件：\r\n%s\r\n\r\n当前记录文件：\r\n%s\r\n\r\n是否继续？",
-		len(records),
-		dlg.FilePath,
-		basePath,
-	)
-	if walk.MsgBox(mainWindow, "导入历史记录", message, walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes {
-		return
-	}
-
-	if err := writeInvestmentRecordsFile(basePath, records); err != nil {
-		walk.MsgBox(mainWindow, "导入失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
-	}
-	investmentRecords = records
-	resetHistorySelection()
-	historyListModel.PublishRowsReset()
-	refreshTrendView()
-	if len(investmentRecords) > 0 && historyTable != nil {
-		_ = historyTable.SetCurrentIndex(0)
-		showSelectedHistoryRecord()
-	}
-	statusBarItem.SetText("历史投资记录已导入：" + dlg.FilePath)
-	walk.MsgBox(mainWindow, "导入完成", "历史投资记录已导入到程序目录。", walk.MsgBoxOK|walk.MsgBoxIconInformation)
-}
-
-func resetHistorySelection() {
-	selectedHistoryIndex = -1
-	selectedAssetIndex = -1
-	selectedHistoryDraft = InvestmentRecord{}
-	if historyAssetModel != nil {
-		historyAssetModel.PublishRowsReset()
-	}
-	if historyDetailPanel != nil {
-		historyDetailPanel.SetEnabled(false)
-	}
-}
-
-func refreshHistoryView() {
-	if historyFileLabel == nil {
-		return
-	}
-	path, err := recordsFilePath()
-	if err == nil {
-		historyFileLabel.SetText("记录文件：" + path)
-	}
-	historyListModel.PublishRowsReset()
-	if len(investmentRecords) > 0 && historyTable.CurrentIndex() < 0 {
-		_ = historyTable.SetCurrentIndex(0)
-		showSelectedHistoryRecord()
-	}
-}
-
-func showSelectedHistoryRecord() {
-	index := historyTable.CurrentIndex()
-	if index < 0 || index >= len(investmentRecords) {
-		selectedHistoryIndex = -1
-		historyDetailPanel.SetEnabled(false)
-		return
-	}
-
-	selectedHistoryIndex = index
-	selectedHistoryDraft = cloneInvestmentRecord(investmentRecords[index])
-	loadingHistoryEditor = true
-	historyArchiveEdit.SetText(selectedHistoryDraft.ArchivedAt)
-	historyNotesEdit.SetText(selectedHistoryDraft.Notes)
-	_ = historyInvestEdit.SetValue(selectedHistoryDraft.InvestAmount)
-	historyDetailPanel.SetEnabled(true)
-	historyAssetModel.PublishRowsReset()
-	loadingHistoryEditor = false
-	refreshHistorySummary()
-
-	if len(selectedHistoryDraft.Assets) > 0 {
-		_ = historyAssetTable.SetCurrentIndex(0)
-		loadSelectedHistoryAsset()
-	}
-}
-
-func loadSelectedHistoryAsset() {
-	index := historyAssetTable.CurrentIndex()
-	if index < 0 || index >= len(selectedHistoryDraft.Assets) {
-		selectedAssetIndex = -1
-		return
-	}
-	selectedAssetIndex = index
-	asset := selectedHistoryDraft.Assets[index]
-	loadingHistoryEditor = true
-	historyAssetNameEdit.SetText(asset.Name)
-	_ = historyTargetEdit.SetValue(asset.TargetPct)
-	_ = historyBeforeEdit.SetValue(asset.BeforeAmount)
-	_ = historyBuyEdit.SetValue(asset.BuyAmount)
-	loadingHistoryEditor = false
-}
-
-func syncHistoryAssetEditor() {
-	if loadingHistoryEditor || selectedAssetIndex < 0 || selectedAssetIndex >= len(selectedHistoryDraft.Assets) {
-		return
-	}
-	asset := &selectedHistoryDraft.Assets[selectedAssetIndex]
-	asset.Name = strings.TrimSpace(historyAssetNameEdit.Text())
-	asset.TargetPct = historyTargetEdit.Value()
-	asset.BeforeAmount = historyBeforeEdit.Value()
-	asset.BuyAmount = historyBuyEdit.Value()
-	recalculateInvestmentRecord(&selectedHistoryDraft)
-	historyAssetModel.PublishRowsReset()
-	_ = historyAssetTable.SetCurrentIndex(selectedAssetIndex)
-	refreshHistorySummary()
-	autoSaveHistoryChanges()
-}
-
-func syncHistoryRecordFields() {
-	if loadingHistoryEditor || selectedHistoryIndex < 0 {
-		return
-	}
-	selectedHistoryDraft.ArchivedAt = strings.TrimSpace(historyArchiveEdit.Text())
-	selectedHistoryDraft.Notes = strings.TrimSpace(historyNotesEdit.Text())
-	recalculateInvestmentRecord(&selectedHistoryDraft)
-	historyAssetModel.PublishRowsReset()
-	refreshHistorySummary()
-	autoSaveHistoryChanges()
-}
-
-func refreshHistorySummary() {
-	recalculateInvestmentRecord(&selectedHistoryDraft)
-	if historyInvestEdit != nil {
-		loadingHistoryEditor = true
-		_ = historyInvestEdit.SetValue(selectedHistoryDraft.InvestAmount)
-		loadingHistoryEditor = false
-	}
-	historySummaryLabel.SetText(fmt.Sprintf(
-		"买入前总额 %s 元｜真实投入 %s 元｜买入后总额 %s 元",
-		formatMoney(selectedHistoryDraft.CurrentTotal),
-		formatMoney(selectedHistoryDraft.InvestAmount),
-		formatMoney(selectedHistoryDraft.AfterTotal),
-	))
-}
-
 func recalculateInvestmentRecord(record *InvestmentRecord) {
+	if record == nil {
+		return
+	}
+	if isSellRecord(*record) {
+		var sold float64
+		for i := range record.Assets {
+			asset := &record.Assets[i]
+			asset.Name = strings.TrimSpace(asset.Name)
+			asset.SellAmount = roundMoney(asset.SellAmount)
+			asset.BuyAmount = 0
+			asset.BeforeAmount = 0
+			asset.BeforePct = 0
+			asset.AfterAmount = 0
+			asset.AfterPct = 0
+			asset.LowLine = 0
+			asset.HighLine = 0
+			asset.Status = ""
+			sold += asset.SellAmount
+		}
+		record.SellAmount = roundMoney(sold)
+		record.InvestAmount = 0
+		record.CurrentTotal = 0
+		record.AfterTotal = 0
+		record.AllocatedCash = 0
+		record.RemainingCash = 0
+		return
+	}
+
 	var currentTotal float64
 	var allocated float64
 	for _, asset := range record.Assets {
@@ -832,6 +297,7 @@ func recalculateInvestmentRecord(record *InvestmentRecord) {
 	record.CurrentTotal = roundMoney(currentTotal)
 	record.AllocatedCash = roundMoney(allocated)
 	record.InvestAmount = record.AllocatedCash
+	record.SellAmount = 0
 	record.AfterTotal = roundMoney(record.CurrentTotal + record.AllocatedCash)
 	record.RemainingCash = 0
 
@@ -859,55 +325,10 @@ func recalculateInvestmentRecord(record *InvestmentRecord) {
 	}
 }
 
-func saveHistoryChanges() error {
-	if selectedHistoryIndex < 0 || selectedHistoryIndex >= len(investmentRecords) {
-		return fmt.Errorf("请先选择历史记录")
-	}
-
-	archivedAt := strings.TrimSpace(historyArchiveEdit.Text())
-	parsed, err := time.ParseInLocation(archiveTimeFmt, archivedAt, time.Local)
-	if err != nil {
-		return fmt.Errorf("归档时间格式应为：2026-06-18 15:30:00")
-	}
-	selectedHistoryDraft.ArchivedAt = parsed.Format(archiveTimeFmt)
-	selectedHistoryDraft.Notes = strings.TrimSpace(historyNotesEdit.Text())
-	recalculateInvestmentRecord(&selectedHistoryDraft)
-
-	if err := validateInvestmentRecord(selectedHistoryDraft); err != nil {
-		return err
-	}
-
-	recordID := investmentRecords[selectedHistoryIndex].ID
-	selectedHistoryDraft.ID = recordID
-	investmentRecords[selectedHistoryIndex] = cloneInvestmentRecord(selectedHistoryDraft)
-	sort.SliceStable(investmentRecords, func(i, j int) bool {
-		return investmentRecords[i].ArchivedAt > investmentRecords[j].ArchivedAt
-	})
-	if err := saveInvestmentRecords(); err != nil {
-		return err
-	}
-
-	historyListModel.PublishRowsReset()
-	refreshTrendView()
-	for i := range investmentRecords {
-		if investmentRecords[i].ID == recordID {
-			selectedHistoryIndex = i
-			_ = historyTable.SetCurrentIndex(i)
-			break
-		}
-	}
-	return nil
-}
-
-func autoSaveHistoryChanges() {
-	if err := saveHistoryChanges(); err != nil {
-		statusBarItem.SetText("自动保存失败：" + err.Error())
-		return
-	}
-	statusBarItem.SetText("历史投资记录已自动保存")
-}
-
 func validateInvestmentRecord(record InvestmentRecord) error {
+	if isSellRecord(record) {
+		return validateSellRecord(record)
+	}
 	if len(record.Assets) < 2 {
 		return fmt.Errorf("历史记录至少需要两项资产")
 	}
@@ -935,38 +356,58 @@ func validateInvestmentRecord(record InvestmentRecord) error {
 	return nil
 }
 
-func deleteSelectedHistoryRecord() {
-	if selectedHistoryIndex < 0 || selectedHistoryIndex >= len(investmentRecords) {
-		return
+func validateSellRecord(record InvestmentRecord) error {
+	if len(record.Assets) == 0 {
+		return fmt.Errorf("没有填写卖出金额，不生成卖出记录")
 	}
-	if walk.MsgBox(
-		mainWindow,
-		"删除历史记录",
-		"确定删除 "+investmentRecords[selectedHistoryIndex].ArchivedAt+" 的投资记录吗？",
-		walk.MsgBoxYesNo|walk.MsgBoxIconQuestion,
-	) != walk.DlgCmdYes {
-		return
+	seen := make(map[string]struct{}, len(record.Assets))
+	total := 0.0
+	for i, asset := range record.Assets {
+		name := strings.TrimSpace(asset.Name)
+		if name == "" {
+			return fmt.Errorf("第 %d 项资产名称不能为空", i+1)
+		}
+		key := strings.ToLower(name)
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("资产名称不能重复：%s", name)
+		}
+		seen[key] = struct{}{}
+		if asset.SellAmount < 0 {
+			return fmt.Errorf("%s 的卖出金额不能为负数", name)
+		}
+		total += asset.SellAmount
 	}
-
-	investmentRecords = append(
-		investmentRecords[:selectedHistoryIndex],
-		investmentRecords[selectedHistoryIndex+1:]...,
-	)
-	if err := saveInvestmentRecords(); err != nil {
-		walk.MsgBox(mainWindow, "删除失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
+	if total <= moneyEpsilon {
+		return fmt.Errorf("没有填写卖出金额，不生成卖出记录")
 	}
-	selectedHistoryIndex = -1
-	selectedAssetIndex = -1
-	historyListModel.PublishRowsReset()
-	historyAssetModel.PublishRowsReset()
-	historyDetailPanel.SetEnabled(false)
-	refreshTrendView()
-	statusBarItem.SetText("历史投资记录已删除")
+	return nil
 }
 
 func cloneInvestmentRecord(record InvestmentRecord) InvestmentRecord {
 	clone := record
 	clone.Assets = append([]InvestmentAssetRecord(nil), record.Assets...)
 	return clone
+}
+
+func cloneInvestmentRecords(records []InvestmentRecord) []InvestmentRecord {
+	clone := make([]InvestmentRecord, len(records))
+	for i, record := range records {
+		clone[i] = cloneInvestmentRecord(record)
+	}
+	return clone
+}
+
+func isSellRecord(record InvestmentRecord) bool {
+	return strings.EqualFold(strings.TrimSpace(record.RecordType), recordTypeSell)
+}
+
+func recordSellTotal(record InvestmentRecord) float64 {
+	total := 0.0
+	for _, asset := range record.Assets {
+		total += asset.SellAmount
+	}
+	if total <= moneyEpsilon && record.SellAmount > moneyEpsilon {
+		total = record.SellAmount
+	}
+	return roundMoney(total)
 }

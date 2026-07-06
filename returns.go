@@ -8,8 +8,9 @@ import (
 )
 
 const (
-	yieldDataHint       = "收益按期初持仓、期间买入现金流和当月买入前金额测算"
-	yieldInitialMessage = "选择资产和月份后点击“测算收益”"
+	yieldDataHint       = "年化收益率优先按 XIRR 计算，无法求解时回退为 Modified Dietz 近似；现金流包含所选资产的买入和卖出。"
+	yieldInitialMessage = "选择资产和月份后点击测算收益"
+	yieldSellHint       = "为确保年化收益率正确，若期间存在卖出，请在平衡买入计算界面中填写卖出信息"
 )
 
 type yieldPoint struct {
@@ -42,8 +43,9 @@ type yieldTimedRecord struct {
 }
 
 type yieldCashFlow struct {
-	At     time.Time
-	Amount float64
+	At       time.Time
+	Amount   float64
+	External bool
 }
 
 var yieldSelections = make(map[string]bool)
@@ -77,26 +79,29 @@ func buildYieldChartData(records []InvestmentRecord, selections map[string]bool,
 		return yieldChartData{Message: "开始月份不能晚于结束月份"}
 	}
 
-	months := trendMonthRange(start, end)
+	requestedMonths := trendMonthRange(start, end)
 	selection, ok := resolveYieldSelection(records, selections)
 	if !ok {
-		return yieldChartData{Months: months, Message: "请选择左侧资产"}
+		return yieldChartData{Months: requestedMonths, Message: "请选择左侧资产"}
 	}
 
 	monthly := buildMonthlyTrendRecords(records)
-	startRecord, ok := monthly[start]
+	startRecord, baseValue, lastMonth, ok := yieldDataBounds(requestedMonths, monthly, selection)
 	if !ok {
-		return yieldChartData{Months: months, SelectionLabel: selection.Label, Message: "开始月份没有可作为期初的历史记录"}
-	}
-	baseValue, ok := yieldRecordBeforeAmount(startRecord.Record, selection)
-	if !ok {
-		return yieldChartData{Months: months, SelectionLabel: selection.Label, Message: "开始月份没有所选资产的买入前金额"}
+		return yieldChartData{Months: requestedMonths, SelectionLabel: selection.Label, Message: "所选时间周期内无法取到可测算数据"}
 	}
 
+	months := trendMonthRange(start, lastMonth)
 	timedRecords := sortedYieldRecords(records)
 	points := make([]yieldPoint, 0, len(months))
 	for _, month := range months {
 		point := yieldPoint{Month: month}
+		if month.Before(startRecord.Month) {
+			point.Present = true
+			points = append(points, point)
+			continue
+		}
+
 		monthlyRecord, ok := monthly[month]
 		if !ok || monthlyRecord.ArchivedAt.Before(startRecord.ArchivedAt) {
 			points = append(points, point)
@@ -109,9 +114,9 @@ func buildYieldChartData(records []InvestmentRecord, selections map[string]bool,
 			continue
 		}
 
-		cashFlows, buyTotal := yieldCashFlowsForPoint(timedRecords, selection, startRecord.ArchivedAt, monthlyRecord.ArchivedAt, baseValue, endValue)
-		point.Profit = roundMoney(endValue - baseValue - buyTotal)
-		point.Rate, point.AnnualizedRate = yieldRates(cashFlows, startRecord.ArchivedAt, monthlyRecord.ArchivedAt, baseValue, buyTotal, endValue)
+		cashFlows, buyTotal, sellTotal := yieldCashFlowsForPoint(timedRecords, selection, startRecord.ArchivedAt, monthlyRecord.ArchivedAt, baseValue, endValue)
+		point.Profit = roundMoney(endValue + sellTotal - baseValue - buyTotal)
+		point.Rate, point.AnnualizedRate = yieldRates(cashFlows, startRecord.ArchivedAt, monthlyRecord.ArchivedAt, baseValue, buyTotal, sellTotal, endValue)
 		point.Present = true
 		points = append(points, point)
 	}
@@ -128,6 +133,30 @@ func buildYieldChartData(records []InvestmentRecord, selections map[string]bool,
 		StartAt:        startRecord.ArchivedAt,
 		EndAt:          latestYieldPointTime(points, monthly),
 	}
+}
+
+func yieldDataBounds(months []time.Time, monthly map[time.Time]trendMonthlyRecord, selection yieldSelection) (trendMonthlyRecord, float64, time.Time, bool) {
+	var firstRecord trendMonthlyRecord
+	var firstValue float64
+	var lastMonth time.Time
+	found := false
+	for _, month := range months {
+		monthlyRecord, ok := monthly[month]
+		if !ok {
+			continue
+		}
+		value, ok := yieldRecordBeforeAmount(monthlyRecord.Record, selection)
+		if !ok {
+			continue
+		}
+		if !found {
+			firstRecord = monthlyRecord
+			firstValue = value
+			found = true
+		}
+		lastMonth = month
+	}
+	return firstRecord, firstValue, lastMonth, found
 }
 
 func resolveYieldSelection(records []InvestmentRecord, selections map[string]bool) (yieldSelection, bool) {
@@ -189,6 +218,9 @@ func yieldRecordBeforeAmount(record InvestmentRecord, selection yieldSelection) 
 }
 
 func yieldRecordBuyAmount(record InvestmentRecord, selection yieldSelection) float64 {
+	if isSellRecord(record) {
+		return 0
+	}
 	total := 0.0
 	if selection.Total {
 		for _, asset := range record.Assets {
@@ -212,6 +244,30 @@ func yieldRecordBuyAmount(record InvestmentRecord, selection yieldSelection) flo
 	return roundMoney(total)
 }
 
+func yieldRecordSellAmount(record InvestmentRecord, selection yieldSelection) float64 {
+	if !isSellRecord(record) {
+		return 0
+	}
+	total := 0.0
+	if selection.Total {
+		for _, asset := range record.Assets {
+			total += asset.SellAmount
+		}
+		if total <= moneyEpsilon {
+			total = record.SellAmount
+		}
+		return roundMoney(total)
+	}
+
+	for _, asset := range record.Assets {
+		key := strings.ToLower(strings.TrimSpace(asset.Name))
+		if _, ok := selection.Keys[key]; ok {
+			total += asset.SellAmount
+		}
+	}
+	return roundMoney(total)
+}
+
 func sortedYieldRecords(records []InvestmentRecord) []yieldTimedRecord {
 	timed := make([]yieldTimedRecord, 0, len(records))
 	for _, record := range records {
@@ -230,31 +286,36 @@ func sortedYieldRecords(records []InvestmentRecord) []yieldTimedRecord {
 	return timed
 }
 
-func yieldCashFlowsForPoint(records []yieldTimedRecord, selection yieldSelection, startAt, endAt time.Time, baseValue, endValue float64) ([]yieldCashFlow, float64) {
+func yieldCashFlowsForPoint(records []yieldTimedRecord, selection yieldSelection, startAt, endAt time.Time, baseValue, endValue float64) ([]yieldCashFlow, float64, float64) {
 	cashFlows := make([]yieldCashFlow, 0, len(records)+2)
 	if math.Abs(baseValue) > moneyEpsilon {
 		cashFlows = append(cashFlows, yieldCashFlow{At: startAt, Amount: -baseValue})
 	}
 
 	buyTotal := 0.0
+	sellTotal := 0.0
 	for _, record := range records {
 		if record.At.Before(startAt) || !record.At.Before(endAt) {
 			continue
 		}
 		buyAmount := yieldRecordBuyAmount(record.Record, selection)
-		if buyAmount <= moneyEpsilon {
-			continue
+		if buyAmount > moneyEpsilon {
+			buyTotal += buyAmount
+			cashFlows = append(cashFlows, yieldCashFlow{At: record.At, Amount: -buyAmount, External: true})
 		}
-		buyTotal += buyAmount
-		cashFlows = append(cashFlows, yieldCashFlow{At: record.At, Amount: -buyAmount})
+		sellAmount := yieldRecordSellAmount(record.Record, selection)
+		if sellAmount > moneyEpsilon {
+			sellTotal += sellAmount
+			cashFlows = append(cashFlows, yieldCashFlow{At: record.At, Amount: sellAmount, External: true})
+		}
 	}
 	if math.Abs(endValue) > moneyEpsilon {
 		cashFlows = append(cashFlows, yieldCashFlow{At: endAt, Amount: endValue})
 	}
-	return cashFlows, roundMoney(buyTotal)
+	return cashFlows, roundMoney(buyTotal), roundMoney(sellTotal)
 }
 
-func yieldRates(cashFlows []yieldCashFlow, startAt, endAt time.Time, baseValue, buyTotal, endValue float64) (float64, float64) {
+func yieldRates(cashFlows []yieldCashFlow, startAt, endAt time.Time, baseValue, buyTotal, sellTotal, endValue float64) (float64, float64) {
 	if !endAt.After(startAt) {
 		return 0, 0
 	}
@@ -265,7 +326,7 @@ func yieldRates(cashFlows []yieldCashFlow, startAt, endAt time.Time, baseValue, 
 		}
 	}
 
-	periodRate, ok := modifiedDietzRate(startAt, endAt, baseValue, buyTotal, endValue, cashFlows)
+	periodRate, ok := modifiedDietzRate(startAt, endAt, baseValue, buyTotal, sellTotal, endValue, cashFlows)
 	if !ok {
 		return 0, 0
 	}
@@ -352,7 +413,7 @@ func xirrNPVAndDerivative(cashFlows []yieldCashFlow, rate float64) (float64, flo
 	return value, derivative
 }
 
-func modifiedDietzRate(startAt, endAt time.Time, baseValue, buyTotal, endValue float64, cashFlows []yieldCashFlow) (float64, bool) {
+func modifiedDietzRate(startAt, endAt time.Time, baseValue, buyTotal, sellTotal, endValue float64, cashFlows []yieldCashFlow) (float64, bool) {
 	periodDays := endAt.Sub(startAt).Hours() / 24
 	if periodDays <= 0 {
 		return 0, false
@@ -360,7 +421,7 @@ func modifiedDietzRate(startAt, endAt time.Time, baseValue, buyTotal, endValue f
 
 	weightedCapital := baseValue
 	for _, cashFlow := range cashFlows {
-		if cashFlow.Amount >= 0 {
+		if !cashFlow.External {
 			continue
 		}
 		if cashFlow.At.Before(startAt) || !cashFlow.At.Before(endAt) {
@@ -373,7 +434,7 @@ func modifiedDietzRate(startAt, endAt time.Time, baseValue, buyTotal, endValue f
 		return 0, false
 	}
 
-	profit := endValue - baseValue - buyTotal
+	profit := endValue + sellTotal - baseValue - buyTotal
 	return finiteFloat(profit/weightedCapital, 0), true
 }
 

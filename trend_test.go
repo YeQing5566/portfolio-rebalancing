@@ -1,6 +1,20 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+func TestRecentYearMonthRangeUsesCurrentMonthAsEnd(t *testing.T) {
+	start, end := recentYearMonthRange(time.Date(2026, 7, 6, 12, 0, 0, 0, time.Local))
+
+	if got := start.Format(trendMonthFmt); got != "2025-07" {
+		t.Fatalf("start = %s, want 2025-07", got)
+	}
+	if got := end.Format(trendMonthFmt); got != "2026-07" {
+		t.Fatalf("end = %s, want 2026-07", got)
+	}
+}
 
 func TestBuildMonthlyTrendRecordsUsesLatestRecordInMonth(t *testing.T) {
 	records := []InvestmentRecord{

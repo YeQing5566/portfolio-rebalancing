@@ -147,6 +147,9 @@ func clonePortfolioAssets(assets []AssetInput) []AssetInput {
 }
 
 func portfolioAssetsFromHistory(record InvestmentRecord) []AssetInput {
+	if isSellRecord(record) {
+		return nil
+	}
 	assets := make([]AssetInput, 0, len(record.Assets))
 	for _, asset := range record.Assets {
 		item := AssetInput{
