@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	lowAllocationRatio  = 0.75
-	highAllocationRatio = 1.25
+	lowAllocationRatio  = 0.8
+	highAllocationRatio = 1.2
 	moneyEpsilon        = 0.000001
 )
 
@@ -455,6 +455,16 @@ func formatMoney(value float64) string {
 
 func formatPercent(value float64) string {
 	return formatFlexibleNumber(value, 2) + "%"
+}
+
+func formatSignedPercent(value float64) string {
+	if math.Abs(value) < moneyEpsilon {
+		return "0%"
+	}
+	if value > 0 {
+		return "+" + formatPercent(value)
+	}
+	return "-" + formatPercent(-value)
 }
 
 func formatFlexibleNumber(value float64, decimals int) string {

@@ -776,6 +776,18 @@ func targetStatusColor(total float64) walk.Color {
 	return dashColors.warning
 }
 
+func relativeTargetDeviationColor(deviationPct float64) walk.Color {
+	absDeviation := math.Abs(deviationPct)
+	switch {
+	case absDeviation >= 20:
+		return dashColors.danger
+	case absDeviation >= 10:
+		return dashColors.warning
+	default:
+		return dashColors.white
+	}
+}
+
 func calculationReady(assets []AssetInput) bool {
 	return len(assets) >= 2 && math.Abs(targetPctSum(assets)-100) <= 0.01
 }
@@ -1058,7 +1070,7 @@ func (ui *dashboardUI) drawSellHistoryDetail(canvas *walk.Canvas, panel walk.Rec
 }
 
 func (ui *dashboardUI) drawHistoryAssetTable(canvas *walk.Canvas, table walk.Rectangle) {
-	headers := []string{"资产", "目标", "买入前", "买入", "买入后", "买入后仓位", "状态"}
+	headers := []string{"资产", "目标", "买入前", "买入", "买入后", "买入后仓位", "相对目标偏离"}
 	widths := []int{maxInt(126, table.Width-76-118-106-120-100-122), 76, 118, 106, 120, 100, 122}
 	drawTableHeader(canvas, ui.fontTiny, table.X, table.Y, widths, headers)
 	rowY := table.Y + 28
@@ -1094,7 +1106,13 @@ func (ui *dashboardUI) drawHistoryAssetTable(canvas *walk.Canvas, table walk.Rec
 		cx += widths[4]
 		drawText(canvas, formatPercent(asset.AfterPct), ui.fontSmall, dashColors.accent, rect(cx+8, r.Y, widths[5]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
 		cx += widths[5]
-		drawText(canvas, asset.Status, ui.fontSmall, statusTextColor(asset.Status), rect(cx+8, r.Y, widths[6]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+		deviationText := "-"
+		deviationColor := dashColors.muted
+		if deviationPct, ok := relativeTargetDeviationPct(asset); ok {
+			deviationText = formatSignedPercent(deviationPct)
+			deviationColor = relativeTargetDeviationColor(deviationPct)
+		}
+		drawText(canvas, deviationText, ui.fontSmall, deviationColor, rect(cx+8, r.Y, widths[6]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
 	}
 	ui.drawScrollBar(canvas, "scroll-history-detail", rect(table.X+table.Width+8, rowY, 6, maxInt(0, table.Y+table.Height-rowY)), len(selectedHistoryDraft.Assets), visible, ui.historyAssetScroll)
 }

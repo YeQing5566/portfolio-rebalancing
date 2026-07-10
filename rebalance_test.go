@@ -4,6 +4,8 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/lxn/walk"
 )
 
 func TestCalculatePortfolioSupportsArbitraryAssetCount(t *testing.T) {
@@ -113,10 +115,10 @@ func TestAllocationUsesFinalTargetWhenSomeAssetRemainsOverweight(t *testing.T) {
 
 func TestSevereThresholdsUseAfterBuyPercentagesAndAreStrict(t *testing.T) {
 	exact, err := CalculatePortfolio(0, []AssetInput{
-		{Name: "资产A", TargetPct: 33, CurrentAmount: 41250},
-		{Name: "资产B", TargetPct: 17, CurrentAmount: 21250},
-		{Name: "资产C", TargetPct: 33, CurrentAmount: 24750},
-		{Name: "资产D", TargetPct: 17, CurrentAmount: 12750},
+		{Name: "资产A", TargetPct: 33, CurrentAmount: 39600},
+		{Name: "资产B", TargetPct: 17, CurrentAmount: 20400},
+		{Name: "资产C", TargetPct: 33, CurrentAmount: 26400},
+		{Name: "资产D", TargetPct: 17, CurrentAmount: 13600},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -129,10 +131,10 @@ func TestSevereThresholdsUseAfterBuyPercentagesAndAreStrict(t *testing.T) {
 	}
 
 	beyond, err := CalculatePortfolio(0, []AssetInput{
-		{Name: "资产A", TargetPct: 33, CurrentAmount: 41260},
-		{Name: "资产B", TargetPct: 17, CurrentAmount: 21260},
-		{Name: "资产C", TargetPct: 33, CurrentAmount: 24740},
-		{Name: "资产D", TargetPct: 17, CurrentAmount: 12740},
+		{Name: "资产A", TargetPct: 33, CurrentAmount: 39610},
+		{Name: "资产B", TargetPct: 17, CurrentAmount: 20410},
+		{Name: "资产C", TargetPct: 33, CurrentAmount: 26390},
+		{Name: "资产D", TargetPct: 17, CurrentAmount: 13590},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -364,11 +366,76 @@ func TestFormatResultShowsSevereLowReminderFromCalculatedPercent(t *testing.T) {
 	if !strings.Contains(output, "严重偏离提醒") {
 		t.Fatalf("expected severe reminder section, got:\n%s", output)
 	}
-	if !strings.Contains(output, "高目标资产 买入后预计 66.67%，低于严重低配线 74.25%。") {
+	if !strings.Contains(output, "高目标资产 买入后预计 66.67%，低于严重低配线 79.2%。") {
 		t.Fatalf("expected severe low reminder for high target asset, got:\n%s", output)
 	}
 	if !strings.Contains(output, "0 元") {
 		t.Fatalf("expected zero buy amounts to be shown, got:\n%s", output)
+	}
+}
+
+func TestRelativeTargetDeviationFormatting(t *testing.T) {
+	cases := []struct {
+		name  string
+		asset InvestmentAssetRecord
+		want  string
+	}{
+		{
+			name:  "positive with decimals",
+			asset: InvestmentAssetRecord{TargetPct: 40, AfterPct: 44.448},
+			want:  "+11.12%",
+		},
+		{
+			name:  "negative without trailing decimals",
+			asset: InvestmentAssetRecord{TargetPct: 50, AfterPct: 47},
+			want:  "-6%",
+		},
+		{
+			name:  "zero deviation",
+			asset: InvestmentAssetRecord{TargetPct: 25, AfterPct: 25},
+			want:  "0%",
+		},
+		{
+			name:  "rounded one-third target",
+			asset: InvestmentAssetRecord{TargetPct: 33.333333, AfterPct: 36.6666663},
+			want:  "+10%",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			deviation, ok := relativeTargetDeviationPct(tc.asset)
+			if !ok {
+				t.Fatal("expected deviation to be calculated")
+			}
+			if got := formatSignedPercent(deviation); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	if _, ok := relativeTargetDeviationPct(InvestmentAssetRecord{AfterPct: 10}); ok {
+		t.Fatal("zero target should not calculate a relative deviation")
+	}
+}
+
+func TestRelativeTargetDeviationColorThresholds(t *testing.T) {
+	cases := []struct {
+		deviation float64
+		want      walk.Color
+	}{
+		{deviation: 9.99, want: dashColors.white},
+		{deviation: -9.99, want: dashColors.white},
+		{deviation: 10, want: dashColors.warning},
+		{deviation: -19.99, want: dashColors.warning},
+		{deviation: 20, want: dashColors.danger},
+		{deviation: -20, want: dashColors.danger},
+	}
+
+	for _, tc := range cases {
+		if got := relativeTargetDeviationColor(tc.deviation); got != tc.want {
+			t.Fatalf("deviation %.2f got color %v, want %v", tc.deviation, got, tc.want)
+		}
 	}
 }
 

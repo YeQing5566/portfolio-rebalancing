@@ -325,6 +325,13 @@ func recalculateInvestmentRecord(record *InvestmentRecord) {
 	}
 }
 
+func relativeTargetDeviationPct(asset InvestmentAssetRecord) (float64, bool) {
+	if asset.TargetPct <= moneyEpsilon {
+		return 0, false
+	}
+	return (asset.AfterPct - asset.TargetPct) / asset.TargetPct * 100, true
+}
+
 func validateInvestmentRecord(record InvestmentRecord) error {
 	if isSellRecord(record) {
 		return validateSellRecord(record)
