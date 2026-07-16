@@ -1427,8 +1427,7 @@ func (ui *dashboardUI) paintYield(canvas *walk.Canvas, bounds walk.Rectangle) {
 	buttonW := 118
 	ui.drawButton(canvas, rect(chartPanel.X+chartPanel.Width-dashStyle.cardPad-buttonW, chartPanel.Y+58, buttonW, 38), "测算收益", "yield-run", true)
 
-	summary := ui.yieldSummaryText()
-	drawText(canvas, summary, ui.fontTiny, dashColors.muted, rect(chartPanel.X+18, chartPanel.Y+102, chartPanel.Width-36, 18), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+	ui.drawYieldSummary(canvas, rect(chartPanel.X+18, chartPanel.Y+102, chartPanel.Width-36, 18))
 
 	chart := rect(chartPanel.X+18, chartPanel.Y+132, chartPanel.Width-36, chartPanel.Height-154)
 	ui.drawYieldChart(canvas, chart)
@@ -1564,25 +1563,42 @@ func (ui *dashboardUI) drawYieldTooltip(canvas *walk.Canvas, chart, plot walk.Re
 	drawText(canvas, "收益率 "+formatYieldRate(point.Rate), ui.fontSmall, dashColors.text, rect(tip.X+12, tip.Y+52, tip.Width-24, 18), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
 }
 
-func (ui *dashboardUI) yieldSummaryText() string {
+func (ui *dashboardUI) yieldSummaryParts() (prefix, annualized string, highlighted bool) {
 	if !ui.yieldCalculated {
-		return yieldInitialMessage
+		return yieldInitialMessage, "", false
 	}
 	if ui.yieldData.Message != "" && !yieldPointsHaveAny(ui.yieldData.Points) {
-		return ui.yieldData.Message
+		return ui.yieldData.Message, "", false
 	}
 	latest, ok := latestYieldPoint(ui.yieldData.Points)
 	if !ok {
-		return "暂无可显示收益数据"
+		return "暂无可显示收益数据", "", false
 	}
 	return fmt.Sprintf(
-		"测算对象：%s｜最新点：%s｜总收益 %s 元｜收益率 %s｜年化 %s",
+		"测算对象：%s｜最新点：%s｜总收益 %s 元｜收益率 %s｜",
 		ui.yieldData.SelectionLabel,
 		latest.Month.Format(trendMonthFmt),
 		formatMoney(latest.Profit),
 		formatYieldRate(latest.Rate),
-		formatYieldRate(latest.AnnualizedRate),
-	)
+	), "年化 " + formatYieldRate(latest.AnnualizedRate), true
+}
+
+func (ui *dashboardUI) drawYieldSummary(canvas *walk.Canvas, r walk.Rectangle) {
+	prefix, annualized, highlighted := ui.yieldSummaryParts()
+	format := walk.TextLeft | walk.TextVCenter | walk.TextEndEllipsis
+	if !highlighted {
+		drawText(canvas, prefix, ui.fontTiny, dashColors.muted, r, format)
+		return
+	}
+
+	annualizedWidth := measureTextWidth(canvas, annualized, ui.fontTiny)
+	if annualizedWidth >= r.Width {
+		drawText(canvas, annualized, ui.fontTiny, dashColors.accent, r, format)
+		return
+	}
+	prefixWidth := minInt(measureTextWidth(canvas, prefix, ui.fontTiny), r.Width-annualizedWidth)
+	drawText(canvas, prefix, ui.fontTiny, dashColors.muted, rect(r.X, r.Y, prefixWidth, r.Height), format)
+	drawText(canvas, annualized, ui.fontTiny, dashColors.accent, rect(r.X+prefixWidth, r.Y, annualizedWidth, r.Height), format)
 }
 
 func formatYieldRate(value float64) string {
