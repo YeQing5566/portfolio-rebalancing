@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lxn/walk"
 )
@@ -61,7 +62,7 @@ func TestPreBuyOverTargetAssetCanStillReceiveCashForFinalTarget(t *testing.T) {
 		{Name: "资产C", TargetPct: 30, CurrentAmount: 20000},
 	}
 
-	result, err := CalculatePortfolio(50000, inputs)
+	result, err := CalculatePortfolioWithDeviationThreshold(50000, inputs, 30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,16 +101,13 @@ func TestAllocationUsesFinalTargetWhenSomeAssetRemainsOverweight(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if result.Assets[0].BuyAmount != 0 {
-		t.Fatalf("asset already above its final target amount should not be bought, got %.2f", result.Assets[0].BuyAmount)
-	}
-	assertClose(t, result.Assets[1].BuyAmount, 10000, 0.01)
-	assertClose(t, result.Assets[2].BuyAmount, 10000, 0.01)
-	if !result.Assets[0].IsSeverelyHigh {
-		t.Fatal("asset A should be severely overweight after the proposed buys")
-	}
-	if !result.Assets[1].IsSeverelyLow || !result.Assets[2].IsSeverelyLow {
-		t.Fatal("assets B and C should remain severely underweight")
+	assertClose(t, result.Assets[0].BuyAmount, -32000, 0.01)
+	assertClose(t, result.Assets[1].BuyAmount, 26000, 0.01)
+	assertClose(t, result.Assets[2].BuyAmount, 26000, 0.01)
+	assertClose(t, result.EstimatedSellTotal, 32000, 0.01)
+	assertClose(t, result.AllocatedCash, 52000, 0.01)
+	for _, asset := range result.Assets {
+		assertClose(t, asset.AfterPct, asset.TargetPct, 0.0001)
 	}
 }
 
@@ -125,8 +123,8 @@ func TestSevereThresholdsUseAfterBuyPercentagesAndAreStrict(t *testing.T) {
 	}
 
 	for _, asset := range exact.Assets {
-		if asset.IsSeverelyHigh || asset.IsSeverelyLow {
-			t.Fatalf("%s should not trigger at an exact threshold", asset.Name)
+		if asset.PreBuySeverelyHigh {
+			t.Fatalf("%s should not trigger sell rebalancing at an exact threshold", asset.Name)
 		}
 	}
 
@@ -139,11 +137,54 @@ func TestSevereThresholdsUseAfterBuyPercentagesAndAreStrict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !beyond.Assets[0].IsSeverelyHigh || !beyond.Assets[1].IsSeverelyHigh {
-		t.Fatal("values above high thresholds should trigger reminders")
+	if !beyond.Assets[0].PreBuySeverelyHigh || !beyond.Assets[1].PreBuySeverelyHigh {
+		t.Fatal("values above high thresholds should trigger sell rebalancing")
 	}
-	if !beyond.Assets[2].IsSeverelyLow || !beyond.Assets[3].IsSeverelyLow {
-		t.Fatal("values below low thresholds should trigger reminders")
+	if beyond.EstimatedSellTotal <= 0 {
+		t.Fatal("sell rebalancing should calculate estimated sells")
+	}
+	for _, asset := range beyond.Assets {
+		assertClose(t, asset.AfterPct, asset.TargetPct, 0.0001)
+	}
+}
+
+func TestCustomRelativeDeviationThresholdControlsSevereStatus(t *testing.T) {
+	inputs := []AssetInput{
+		{Name: "资产A", TargetPct: 50, CurrentAmount: 62500},
+		{Name: "资产B", TargetPct: 50, CurrentAmount: 37500},
+	}
+
+	result, err := CalculatePortfolioWithDeviationThreshold(0, inputs, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Assets[0].IsSeverelyHigh || result.Assets[1].IsSeverelyLow {
+		t.Fatal("25% relative deviations should not trigger a 30% threshold")
+	}
+	assertClose(t, result.Assets[0].HighLine, 65, 0.0001)
+	assertClose(t, result.Assets[1].LowLine, 35, 0.0001)
+
+	result, err = CalculatePortfolioWithDeviationThreshold(0, inputs, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Assets[0].PreBuySeverelyHigh || result.EstimatedSellTotal <= 0 {
+		t.Fatal("25% relative overweight should trigger a 20% sell threshold")
+	}
+	for _, asset := range result.Assets {
+		assertClose(t, asset.AfterPct, asset.TargetPct, 0.0001)
+	}
+}
+
+func TestCalculatePortfolioRejectsInvalidRelativeDeviationThreshold(t *testing.T) {
+	inputs := []AssetInput{
+		{Name: "资产A", TargetPct: 50, CurrentAmount: 50000},
+		{Name: "资产B", TargetPct: 50, CurrentAmount: 50000},
+	}
+	for _, threshold := range []float64{0, -1, 100.01} {
+		if _, err := CalculatePortfolioWithDeviationThreshold(0, inputs, threshold); err == nil {
+			t.Fatalf("threshold %v should be rejected", threshold)
+		}
 	}
 }
 
@@ -157,79 +198,60 @@ func TestCalculatePortfolioRejectsInvalidTargetSum(t *testing.T) {
 	}
 }
 
-func TestInvestmentRecordStoresBeforeAndAfterDetails(t *testing.T) {
-	result, err := CalculatePortfolio(10000, []AssetInput{
+func TestValuationRecordStoresCurrentPortfolioSnapshot(t *testing.T) {
+	record, err := valuationRecordFromAssets([]AssetInput{
 		{Name: "资产A", TargetPct: 40, CurrentAmount: 50000},
 		{Name: "资产B", TargetPct: 60, CurrentAmount: 50000},
-	})
+	}, mustArchiveTime(t, "2026-07-21 12:00:00"))
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	record := recordFromResult(result)
 	if len(record.Assets) != 2 {
-		t.Fatalf("expected two archived assets, got %d", len(record.Assets))
+		t.Fatalf("expected two snapshot assets, got %d", len(record.Assets))
 	}
 	assertClose(t, record.CurrentTotal, 100000, 0.01)
-	assertClose(t, record.AfterTotal, 110000, 0.01)
-	assertClose(t, record.AllocatedCash, 10000, 0.01)
-	for i, asset := range record.Assets {
-		assertClose(t, asset.AfterAmount, asset.BeforeAmount+asset.BuyAmount, 0.01)
-		assertClose(t, asset.AfterPct, result.Assets[i].AfterPct, 0.0001)
-	}
+	assertClose(t, record.Assets[0].CurrentPct, 50, 0.0001)
+	assertClose(t, record.Assets[1].CurrentAmount, 50000, 0.01)
 }
 
-func TestInvestmentRecordWithActualBuysRecalculatesAfterDetails(t *testing.T) {
-	result, err := CalculatePortfolio(10000, []AssetInput{
-		{Name: "资产A", TargetPct: 40, CurrentAmount: 50000},
-		{Name: "资产B", TargetPct: 60, CurrentAmount: 50000},
-	})
+func TestFinalizedBuyRecordStoresOnlyNonZeroCashFlows(t *testing.T) {
+	record := buyRecordFromAssets([]AssetInput{{Name: "资产A"}, {Name: "资产B"}, {Name: "资产C"}}, mustArchiveTime(t, "2026-07-21 12:00:00"))
+	record.Assets[0].BuyAmount = 1200
+	record.Assets[1].BuyAmount = 0
+	record.Assets[2].BuyAmount = 7600
+	finalized, err := finalizedBuyRecord(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	record, err := recordFromResultWithActualBuys(result, []float64{1200, 7600})
-	if err != nil {
-		t.Fatal(err)
+	if len(finalized.Assets) != 2 {
+		t.Fatalf("expected two non-zero buy assets, got %d", len(finalized.Assets))
 	}
-
-	assertClose(t, record.InvestAmount, 8800, 0.01)
-	assertClose(t, record.AllocatedCash, 8800, 0.01)
-	assertClose(t, record.RemainingCash, 0, 0.01)
-	assertClose(t, record.AfterTotal, 108800, 0.01)
-	assertClose(t, record.Assets[0].BuyAmount, 1200, 0.01)
-	assertClose(t, record.Assets[0].AfterAmount, 51200, 0.01)
-	assertClose(t, record.Assets[0].AfterPct, 47.0588235, 0.0001)
-	assertClose(t, record.Assets[1].BuyAmount, 7600, 0.01)
-	assertClose(t, record.Assets[1].AfterAmount, 57600, 0.01)
-	assertClose(t, record.Assets[1].AfterPct, 52.9411765, 0.0001)
+	assertClose(t, finalized.InvestAmount, 8800, 0.01)
+	assertClose(t, finalized.Assets[0].BuyAmount, 1200, 0.01)
+	assertClose(t, finalized.Assets[1].BuyAmount, 7600, 0.01)
 }
 
-func TestRecalculateInvestmentRecordAfterEditing(t *testing.T) {
+func TestRecalculateValuationRecordAfterEditing(t *testing.T) {
 	record := InvestmentRecord{
-		InvestAmount: 10000,
+		RecordType: recordTypeValuation,
 		Assets: []InvestmentAssetRecord{
-			{Name: "资产A", TargetPct: 40, BeforeAmount: 50000, BuyAmount: 0},
-			{Name: "资产B", TargetPct: 60, BeforeAmount: 50000, BuyAmount: 10000},
+			{Name: "资产A", TargetPct: 40, CurrentAmount: 40000},
+			{Name: "资产B", TargetPct: 60, CurrentAmount: 60000},
 		},
 	}
 
 	recalculateInvestmentRecord(&record)
 	assertClose(t, record.CurrentTotal, 100000, 0.01)
-	assertClose(t, record.AllocatedCash, 10000, 0.01)
-	assertClose(t, record.AfterTotal, 110000, 0.01)
-	assertClose(t, record.Assets[0].BeforePct, 50, 0.0001)
-	assertClose(t, record.Assets[1].AfterAmount, 60000, 0.01)
-	assertClose(t, record.Assets[1].AfterPct, 54.5454545, 0.0001)
+	assertClose(t, record.Assets[0].CurrentPct, 40, 0.0001)
+	assertClose(t, record.Assets[1].CurrentPct, 60, 0.0001)
 }
 
 func TestRecalculateInvestmentRecordUsesActualBuyTotalAsInvestment(t *testing.T) {
 	record := InvestmentRecord{
-		InvestAmount:  20000,
-		RemainingCash: 12000,
+		RecordType: recordTypeBuy,
 		Assets: []InvestmentAssetRecord{
-			{Name: "资产A", TargetPct: 40, BeforeAmount: 50000, BuyAmount: 1200},
-			{Name: "资产B", TargetPct: 60, BeforeAmount: 50000, BuyAmount: 6800},
+			{Name: "资产A", BuyAmount: 1200},
+			{Name: "资产B", BuyAmount: 6800},
 		},
 	}
 
@@ -237,9 +259,6 @@ func TestRecalculateInvestmentRecordUsesActualBuyTotalAsInvestment(t *testing.T)
 	assertClose(t, record.AllocatedCash, 8000, 0.01)
 	assertClose(t, record.InvestAmount, 8000, 0.01)
 	assertClose(t, record.RemainingCash, 0, 0.01)
-	assertClose(t, record.AfterTotal, 108000, 0.01)
-	assertClose(t, record.Assets[0].AfterPct, 47.4074074, 0.0001)
-	assertClose(t, record.Assets[1].AfterPct, 52.5925926, 0.0001)
 }
 
 func TestFinalizedSellRecordFiltersZeroAmounts(t *testing.T) {
@@ -337,23 +356,23 @@ func TestFormatResultAlignsSuggestedBuyColumns(t *testing.T) {
 		t.Fatalf("suggested buy table should start at the left edge, got %q", header)
 	}
 	header := resultSectionHeader(t, output, "建议买入")
-	assertSameDisplayColumn(t, header, "买入金额", rows[0], "10 元")
+	assertSameDisplayColumn(t, header, "金额变动", rows[0], "+10 元")
 	assertSameDisplayColumn(t, header, "当前仓位", rows[0], "1%")
 	assertSameDisplayColumn(t, header, "买入后仓位", rows[0], "2%")
 	assertSameDisplayColumn(t, header, "目标仓位", rows[0], "3%")
 
-	assertSameDisplayColumn(t, rows[0], "10 元", rows[1], "1,000 元")
+	assertSameDisplayColumn(t, rows[0], "+10 元", rows[1], "+1,000 元")
 	assertSameDisplayColumn(t, rows[0], "1%", rows[1], "12%")
 	assertSameDisplayColumn(t, rows[0], "2%", rows[1], "23%")
 	assertSameDisplayColumn(t, rows[0], "3%", rows[1], "34%")
-	assertSameDisplayColumn(t, rows[0], "10 元", rows[2], "0 元")
+	assertSameDisplayColumn(t, rows[0], "+10 元", rows[2], "0 元")
 	assertSameDisplayColumn(t, rows[0], "1%", rows[2], "87%")
 	if !strings.Contains(rows[2], "0 元") {
 		t.Fatalf("non-buying assets should still be shown with zero buy amount, got %q", rows[2])
 	}
 }
 
-func TestFormatResultShowsSevereLowReminderFromCalculatedPercent(t *testing.T) {
+func TestFormatResultShowsEstimatedSellAndAlwaysShowsBuyReminder(t *testing.T) {
 	result, err := CalculatePortfolio(0, []AssetInput{
 		{Name: "高目标资产", TargetPct: 99, CurrentAmount: 100},
 		{Name: "低目标资产", TargetPct: 1, CurrentAmount: 50},
@@ -366,12 +385,32 @@ func TestFormatResultShowsSevereLowReminderFromCalculatedPercent(t *testing.T) {
 	if !strings.Contains(output, "严重偏离提醒") {
 		t.Fatalf("expected severe reminder section, got:\n%s", output)
 	}
-	if !strings.Contains(output, "高目标资产 买入后预计 66.67%，低于严重低配线 79.2%。") {
-		t.Fatalf("expected severe low reminder for high target asset, got:\n%s", output)
+	if !strings.Contains(output, "低目标资产 存在严重超配，预估需卖出 48.5 元") {
+		t.Fatalf("expected estimated sell reminder, got:\n%s", output)
 	}
-	if !strings.Contains(output, "0 元") {
-		t.Fatalf("expected zero buy amounts to be shown, got:\n%s", output)
+	if !strings.Contains(output, "请执行完买入操作后，使用记录买入留档") {
+		t.Fatalf("expected the always-visible buy reminder, got:\n%s", output)
 	}
+}
+
+func TestSignedMoneySpanDoesNotTreatAssetNameHyphenAsSell(t *testing.T) {
+	line := "0-3年政金债       -500 元  30%  25%"
+	start, end, ok := signedMoneySpan(line)
+	if !ok || line[start:end] != "-500 元" {
+		t.Fatalf("got span %d:%d (%q), want negative amount cell", start, end, line[start:end])
+	}
+	if _, _, ok := signedMoneySpan("0-3年政金债       +500 元  30%  35%"); ok {
+		t.Fatal("asset-name hyphen must not be treated as a negative amount")
+	}
+}
+
+func mustArchiveTime(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.ParseInLocation(archiveTimeFmt, value, time.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }
 
 func TestRelativeTargetDeviationFormatting(t *testing.T) {
@@ -422,19 +461,53 @@ func TestRelativeTargetDeviationFormatting(t *testing.T) {
 func TestRelativeTargetDeviationColorThresholds(t *testing.T) {
 	cases := []struct {
 		deviation float64
+		threshold float64
 		want      walk.Color
 	}{
-		{deviation: 9.99, want: dashColors.white},
-		{deviation: -9.99, want: dashColors.white},
-		{deviation: 10, want: dashColors.warning},
-		{deviation: -19.99, want: dashColors.warning},
-		{deviation: 20, want: dashColors.danger},
-		{deviation: -20, want: dashColors.danger},
+		{deviation: 9.99, threshold: 20, want: dashColors.white},
+		{deviation: -9.99, threshold: 20, want: dashColors.white},
+		{deviation: 10, threshold: 20, want: dashColors.warning},
+		{deviation: -19.99, threshold: 20, want: dashColors.warning},
+		{deviation: 20, threshold: 20, want: dashColors.danger},
+		{deviation: -20, threshold: 20, want: dashColors.danger},
+		{deviation: 25, threshold: 60, want: dashColors.white},
+		{deviation: 25, threshold: 20, want: dashColors.danger},
 	}
 
 	for _, tc := range cases {
-		if got := relativeTargetDeviationColor(tc.deviation); got != tc.want {
-			t.Fatalf("deviation %.2f got color %v, want %v", tc.deviation, got, tc.want)
+		if got := relativeTargetDeviationColor(tc.deviation, tc.threshold); got != tc.want {
+			t.Fatalf("deviation %.2f at threshold %.2f got color %v, want %v", tc.deviation, tc.threshold, got, tc.want)
+		}
+	}
+}
+
+func TestCalculatorTopCardHeightScalesWithWindowHeight(t *testing.T) {
+	if got := scaledCalculatorTopCardHeight(350, 860, 1032, 1032); got != 420 {
+		t.Fatalf("scaled card height = %d, want 420", got)
+	}
+	if got := scaledCalculatorTopCardHeight(350, 860, 860, 860); got != 350 {
+		t.Fatalf("unchanged-window card height = %d, want 350", got)
+	}
+	if got := scaledCalculatorTopCardHeight(350, 860, 720, 720); got != calculatorMinTopCardHeight {
+		t.Fatalf("minimum card height = %d, want %d", got, calculatorMinTopCardHeight)
+	}
+}
+
+func TestTransactionDialogUsesCompactWidthAndMatchesAssetCardRows(t *testing.T) {
+	width, height := transactionDialogSize(&dashboardUI{assetTableHeight: 420})
+	wantRows := assetTableVisibleRows(420)
+	if width != transactionDialogWidth || transactionDialogVisibleRowsForHeight(height) != wantRows {
+		t.Fatalf("dialog size = %dx%d and shows %d rows, want width %d and %d rows", width, height, transactionDialogVisibleRowsForHeight(height), transactionDialogWidth, wantRows)
+	}
+	width, height = transactionDialogSize(&dashboardUI{})
+	wantRows = assetTableVisibleRows(defaultCalculatorTopCardHeight)
+	if width != transactionDialogWidth || transactionDialogVisibleRowsForHeight(height) != wantRows {
+		t.Fatalf("default dialog size = %dx%d and shows %d rows, want width %d and %d rows", width, height, transactionDialogVisibleRowsForHeight(height), transactionDialogWidth, wantRows)
+	}
+	for cardHeight := calculatorMinTopCardHeight; cardHeight <= 700; cardHeight++ {
+		_, dialogHeight := transactionDialogSize(&dashboardUI{assetTableHeight: cardHeight})
+		if got, want := transactionDialogVisibleRowsForHeight(dialogHeight), assetTableVisibleRows(cardHeight); got != want {
+			t.Fatalf("card height %d shows %d rows but dialog height %d shows %d rows", cardHeight, want, dialogHeight, got)
 		}
 	}
 }

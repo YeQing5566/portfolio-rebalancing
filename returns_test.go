@@ -5,22 +5,40 @@ import "testing"
 func TestBuildYieldChartDataUsesStartBaselineAndBuysBeforePoint(t *testing.T) {
 	records := []InvestmentRecord{
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-03-20 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 150, BuyAmount: 5},
+				{Name: "资产A", CurrentAmount: 150},
 			},
 		},
 		{
+			RecordType: recordTypeBuy,
+			ArchivedAt: "2026-03-20 09:00:00",
+			Assets:     []InvestmentAssetRecord{{Name: "资产A", BuyAmount: 5}},
+		},
+		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-02-10 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 130, BuyAmount: 10},
+				{Name: "资产A", CurrentAmount: 130},
 			},
 		},
 		{
+			RecordType: recordTypeBuy,
+			ArchivedAt: "2026-02-10 09:00:00",
+			Assets:     []InvestmentAssetRecord{{Name: "资产A", BuyAmount: 10}},
+		},
+		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-01-20 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 100, BuyAmount: 20},
+				{Name: "资产A", CurrentAmount: 100},
 			},
+		},
+		{
+			RecordType: recordTypeBuy,
+			ArchivedAt: "2026-01-20 09:00:00",
+			Assets:     []InvestmentAssetRecord{{Name: "资产A", BuyAmount: 20}},
 		},
 	}
 	start, _ := parseTrendMonth("2026-01")
@@ -48,20 +66,27 @@ func TestBuildYieldChartDataUsesStartBaselineAndBuysBeforePoint(t *testing.T) {
 func TestBuildYieldChartDataAggregatesSelectedAssetsAndTotalOption(t *testing.T) {
 	records := []InvestmentRecord{
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-02-15 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 120},
-				{Name: "资产B", BeforeAmount: 230},
-				{Name: "资产C", BeforeAmount: 350},
+				{Name: "资产A", CurrentAmount: 120},
+				{Name: "资产B", CurrentAmount: 230},
+				{Name: "资产C", CurrentAmount: 350},
 			},
 		},
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-01-15 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 100, BuyAmount: 10},
-				{Name: "资产B", BeforeAmount: 200, BuyAmount: 20},
-				{Name: "资产C", BeforeAmount: 300, BuyAmount: 0},
+				{Name: "资产A", CurrentAmount: 100},
+				{Name: "资产B", CurrentAmount: 200},
+				{Name: "资产C", CurrentAmount: 300},
 			},
+		},
+		{
+			RecordType: recordTypeBuy,
+			ArchivedAt: "2026-01-15 09:00:00",
+			Assets:     []InvestmentAssetRecord{{Name: "资产A", BuyAmount: 10}, {Name: "资产B", BuyAmount: 20}},
 		},
 	}
 	start, _ := parseTrendMonth("2026-01")
@@ -83,17 +108,20 @@ func TestBuildYieldChartDataAggregatesSelectedAssetsAndTotalOption(t *testing.T)
 func TestBuildYieldChartDataKeepsMissingMonthsEmpty(t *testing.T) {
 	records := []InvestmentRecord{
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-03-08 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 150},
+				{Name: "资产A", CurrentAmount: 150},
 			},
 		},
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-01-08 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 100, BuyAmount: 20},
+				{Name: "资产A", CurrentAmount: 100},
 			},
 		},
+		{RecordType: recordTypeBuy, ArchivedAt: "2026-01-08 09:00:00", Assets: []InvestmentAssetRecord{{Name: "资产A", BuyAmount: 20}}},
 	}
 	start, _ := parseTrendMonth("2026-01")
 	end, _ := parseTrendMonth("2026-03")
@@ -114,17 +142,20 @@ func TestBuildYieldChartDataKeepsMissingMonthsEmpty(t *testing.T) {
 func TestBuildYieldChartDataUsesFirstAvailableMonthAsBaseline(t *testing.T) {
 	records := []InvestmentRecord{
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-04-08 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 125},
+				{Name: "资产A", CurrentAmount: 125},
 			},
 		},
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-03-08 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 100, BuyAmount: 10},
+				{Name: "资产A", CurrentAmount: 100},
 			},
 		},
+		{RecordType: recordTypeBuy, ArchivedAt: "2026-03-08 09:00:00", Assets: []InvestmentAssetRecord{{Name: "资产A", BuyAmount: 10}}},
 	}
 	start, _ := parseTrendMonth("2026-01")
 	end, _ := parseTrendMonth("2026-04")
@@ -163,17 +194,20 @@ func TestBuildYieldChartDataUsesFirstAvailableMonthAsBaseline(t *testing.T) {
 func TestBuildYieldChartDataTrimsTrailingMonthsWithoutData(t *testing.T) {
 	records := []InvestmentRecord{
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-03-08 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 150},
+				{Name: "资产A", CurrentAmount: 150},
 			},
 		},
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-01-08 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 100, BuyAmount: 20},
+				{Name: "资产A", CurrentAmount: 100},
 			},
 		},
+		{RecordType: recordTypeBuy, ArchivedAt: "2026-01-08 09:00:00", Assets: []InvestmentAssetRecord{{Name: "资产A", BuyAmount: 20}}},
 	}
 	start, _ := parseTrendMonth("2026-01")
 	end, _ := parseTrendMonth("2026-06")
@@ -200,9 +234,10 @@ func TestBuildYieldChartDataTrimsTrailingMonthsWithoutData(t *testing.T) {
 func TestBuildYieldChartDataReportsWhenRangeHasNoData(t *testing.T) {
 	records := []InvestmentRecord{
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-03-08 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 150},
+				{Name: "资产A", CurrentAmount: 150},
 			},
 		},
 	}
@@ -222,15 +257,17 @@ func TestBuildYieldChartDataReportsWhenRangeHasNoData(t *testing.T) {
 func TestBuildYieldChartDataPeriodRateWithoutBuys(t *testing.T) {
 	records := []InvestmentRecord{
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-01-01 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 110},
+				{Name: "资产A", CurrentAmount: 110},
 			},
 		},
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2025-01-01 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 100},
+				{Name: "资产A", CurrentAmount: 100},
 			},
 		},
 	}
@@ -249,10 +286,11 @@ func TestBuildYieldChartDataPeriodRateWithoutBuys(t *testing.T) {
 func TestBuildYieldChartDataIncludesSellCashFlowsForSelectedAssets(t *testing.T) {
 	records := []InvestmentRecord{
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2027-01-01 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 80},
-				{Name: "资产B", BeforeAmount: 100},
+				{Name: "资产A", CurrentAmount: 80},
+				{Name: "资产B", CurrentAmount: 100},
 			},
 		},
 		{
@@ -264,10 +302,11 @@ func TestBuildYieldChartDataIncludesSellCashFlowsForSelectedAssets(t *testing.T)
 			},
 		},
 		{
+			RecordType: recordTypeValuation,
 			ArchivedAt: "2026-01-01 09:00:00",
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 100},
-				{Name: "资产B", BeforeAmount: 100},
+				{Name: "资产A", CurrentAmount: 100},
+				{Name: "资产B", CurrentAmount: 100},
 			},
 		},
 	}

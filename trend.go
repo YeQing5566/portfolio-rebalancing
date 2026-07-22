@@ -12,7 +12,7 @@ import (
 const (
 	trendTotalSeries = "总资产"
 	trendMonthFmt    = "2006-01"
-	trendDataHint    = "数据为当月最新记录中的买入前金额"
+	trendDataHint    = "数据为当月最新更新收益记录中的当前持有金额"
 )
 
 type trendMonthlyRecord struct {
@@ -84,7 +84,7 @@ func trendSeriesOptions(records []InvestmentRecord) []string {
 		strings.ToLower(trendTotalSeries): {},
 	}
 	for _, record := range records {
-		if isSellRecord(record) {
+		if !isValuationRecord(record) {
 			continue
 		}
 		for _, asset := range record.Assets {
@@ -172,7 +172,7 @@ func buildTrendChartData(records []InvestmentRecord, selections map[string]bool,
 func buildMonthlyTrendRecords(records []InvestmentRecord) map[time.Time]trendMonthlyRecord {
 	monthly := make(map[time.Time]trendMonthlyRecord)
 	for _, record := range records {
-		if isSellRecord(record) {
+		if !isValuationRecord(record) {
 			continue
 		}
 		archivedAt, ok := parseArchiveTime(record.ArchivedAt)
@@ -259,9 +259,9 @@ func trendAssetCurrentPosition(record InvestmentRecord, name string) (float64, f
 		if strings.ToLower(strings.TrimSpace(asset.Name)) == key {
 			pct := 0.0
 			if total > moneyEpsilon {
-				pct = asset.BeforeAmount / total * 100
+				pct = asset.CurrentAmount / total * 100
 			}
-			return asset.BeforeAmount, pct, true
+			return asset.CurrentAmount, pct, true
 		}
 	}
 	return 0, 0, false
@@ -273,7 +273,7 @@ func trendRecordCurrentTotal(record InvestmentRecord) float64 {
 	}
 	total := 0.0
 	for _, asset := range record.Assets {
-		total += asset.BeforeAmount
+		total += asset.CurrentAmount
 	}
 	if len(record.Assets) > 0 {
 		return roundMoney(total)

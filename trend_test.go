@@ -19,19 +19,21 @@ func TestRecentYearMonthRangeUsesCurrentMonthAsEnd(t *testing.T) {
 func TestBuildMonthlyTrendRecordsUsesLatestRecordInMonth(t *testing.T) {
 	records := []InvestmentRecord{
 		{
+			RecordType:   recordTypeValuation,
 			ArchivedAt:   "2026-01-20 09:00:00",
 			CurrentTotal: 180000,
 			AfterTotal:   200000,
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 110000, AfterAmount: 120000},
+				{Name: "资产A", CurrentAmount: 110000},
 			},
 		},
 		{
+			RecordType:   recordTypeValuation,
 			ArchivedAt:   "2026-01-05 09:00:00",
 			CurrentTotal: 90000,
 			AfterTotal:   100000,
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 55000, AfterAmount: 60000},
+				{Name: "资产A", CurrentAmount: 55000},
 			},
 		},
 	}
@@ -57,19 +59,21 @@ func TestBuildMonthlyTrendRecordsUsesLatestRecordInMonth(t *testing.T) {
 func TestBuildTrendChartDataUsesCurrentHoldingsAndKeepsMissingMonthsOnAxis(t *testing.T) {
 	records := []InvestmentRecord{
 		{
+			RecordType:   recordTypeValuation,
 			ArchivedAt:   "2026-03-08 09:00:00",
 			CurrentTotal: 125000,
 			AfterTotal:   130000,
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 65000, BeforePct: 52, AfterAmount: 70000, AfterPct: 53.8461538},
+				{Name: "资产A", CurrentAmount: 65000},
 			},
 		},
 		{
+			RecordType:   recordTypeValuation,
 			ArchivedAt:   "2026-01-08 09:00:00",
 			CurrentTotal: 90000,
 			AfterTotal:   100000,
 			Assets: []InvestmentAssetRecord{
-				{Name: "资产A", BeforeAmount: 54000, BeforePct: 60, AfterAmount: 60000, AfterPct: 60},
+				{Name: "资产A", CurrentAmount: 54000},
 			},
 		},
 	}

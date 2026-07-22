@@ -61,8 +61,7 @@ func currentPctForInputs(items []AssetInput, index int) float64 {
 }
 
 func initialResultText() string {
-	return "先点击“添加资产”录入名称、目标仓位和当前持有金额。\r\n\r\n" +
-		"至少需要两项资产，且目标仓位合计为 100%。当前总额和当前仓位会根据持有金额自动更新。"
+	return "计算建议前，可先更新各资产持有金额，并点击更新收益按钮保存各资产金额，结合买入卖出记录，可在收益数据测算界面计算出收益数据"
 }
 
 func showStartupError(err error) {

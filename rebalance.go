@@ -9,9 +9,8 @@ import (
 )
 
 const (
-	lowAllocationRatio  = 0.8
-	highAllocationRatio = 1.2
-	moneyEpsilon        = 0.000001
+	defaultRelativeDeviationThresholdPct = 20.0
+	moneyEpsilon                         = 0.000001
 )
 
 type AssetInput struct {
@@ -21,38 +20,48 @@ type AssetInput struct {
 }
 
 type AssetResult struct {
-	Name           string
-	TargetPct      float64
-	CurrentPct     float64
-	CurrentAmount  float64
-	TargetAmount   float64
-	Gap            float64
-	BuyAmount      float64
-	AfterPct       float64
-	LowLine        float64
-	HighLine       float64
-	CanBuy         bool
-	IsSeverelyLow  bool
-	IsSeverelyHigh bool
-	Status         string
+	Name               string
+	TargetPct          float64
+	CurrentPct         float64
+	CurrentAmount      float64
+	TargetAmount       float64
+	Gap                float64
+	BuyAmount          float64
+	AfterPct           float64
+	LowLine            float64
+	HighLine           float64
+	CanBuy             bool
+	PreBuySeverelyHigh bool
+	IsSeverelyLow      bool
+	IsSeverelyHigh     bool
+	Status             string
 }
 
 type PortfolioResult struct {
-	CurrentTotal  float64
-	InvestAmount  float64
-	AfterTotal    float64
-	AllocatedCash float64
-	RemainingCash float64
-	Assets        []*AssetResult
+	CurrentTotal                  float64
+	InvestAmount                  float64
+	AfterTotal                    float64
+	AllocatedCash                 float64
+	RemainingCash                 float64
+	EstimatedSellTotal            float64
+	RelativeDeviationThresholdPct float64
+	Assets                        []*AssetResult
 }
 
-// CalculatePortfolio performs a buy-only rebalance against the portfolio total
-// after the new cash is added. An asset's pre-buy percentage never excludes it
-// from buying: it can receive cash whenever its current amount is below its
-// target amount in the final portfolio.
+// CalculatePortfolio calculates buy-only changes unless a current holding is
+// already above the configured severe-overweight line. In that case it returns
+// signed changes (positive buys and negative estimated sells) that rebalance
+// every holding to its final target.
 func CalculatePortfolio(investAmount float64, inputs []AssetInput) (*PortfolioResult, error) {
+	return CalculatePortfolioWithDeviationThreshold(investAmount, inputs, defaultRelativeDeviationThresholdPct)
+}
+
+func CalculatePortfolioWithDeviationThreshold(investAmount float64, inputs []AssetInput, relativeDeviationThresholdPct float64) (*PortfolioResult, error) {
 	if investAmount < 0 {
 		return nil, fmt.Errorf("本次可投入金额不能为负数")
+	}
+	if !validRelativeDeviationThresholdPct(relativeDeviationThresholdPct) {
+		return nil, fmt.Errorf("触发再平衡的相对偏离阈值必须大于 0%% 且不超过 100%%")
 	}
 	if len(inputs) < 2 {
 		return nil, fmt.Errorf("至少需要添加两项资产")
@@ -94,11 +103,13 @@ func CalculatePortfolio(investAmount float64, inputs []AssetInput) (*PortfolioRe
 	}
 
 	result := &PortfolioResult{
-		CurrentTotal: currentTotal,
-		InvestAmount: investAmount,
-		AfterTotal:   afterTotal,
-		Assets:       make([]*AssetResult, 0, len(inputs)),
+		CurrentTotal:                  currentTotal,
+		InvestAmount:                  investAmount,
+		AfterTotal:                    afterTotal,
+		RelativeDeviationThresholdPct: relativeDeviationThresholdPct,
+		Assets:                        make([]*AssetResult, 0, len(inputs)),
 	}
+	deviationRatio := relativeDeviationThresholdPct / 100
 
 	for _, input := range inputs {
 		currentPct := 0.0
@@ -110,31 +121,88 @@ func CalculatePortfolio(investAmount float64, inputs []AssetInput) (*PortfolioRe
 		gap := targetAmount - input.CurrentAmount
 
 		result.Assets = append(result.Assets, &AssetResult{
-			Name:          strings.TrimSpace(input.Name),
-			TargetPct:     input.TargetPct,
-			CurrentPct:    currentPct,
-			CurrentAmount: input.CurrentAmount,
-			TargetAmount:  targetAmount,
-			Gap:           gap,
-			LowLine:       input.TargetPct * lowAllocationRatio,
-			HighLine:      input.TargetPct * highAllocationRatio,
-			CanBuy:        gap > moneyEpsilon,
+			Name:               strings.TrimSpace(input.Name),
+			TargetPct:          input.TargetPct,
+			CurrentPct:         currentPct,
+			CurrentAmount:      input.CurrentAmount,
+			TargetAmount:       targetAmount,
+			Gap:                gap,
+			LowLine:            input.TargetPct * (1 - deviationRatio),
+			HighLine:           input.TargetPct * (1 + deviationRatio),
+			CanBuy:             gap > moneyEpsilon,
+			PreBuySeverelyHigh: currentPct > input.TargetPct*(1+deviationRatio),
 		})
 	}
 
-	allocateCash(result.Assets, investAmount)
+	needsSellRebalance := false
+	for _, asset := range result.Assets {
+		if asset.PreBuySeverelyHigh {
+			needsSellRebalance = true
+			break
+		}
+	}
+	if needsSellRebalance {
+		allocateTargetChanges(result.Assets, investAmount)
+	} else {
+		allocateCash(result.Assets, investAmount)
+	}
 
 	for _, asset := range result.Assets {
 		asset.AfterPct = (asset.CurrentAmount + asset.BuyAmount) / afterTotal * 100
 		asset.IsSeverelyLow = severelyLow(asset)
 		asset.IsSeverelyHigh = severelyHigh(asset)
 		asset.Status = allocationStatus(asset)
-		result.AllocatedCash += asset.BuyAmount
+		if asset.BuyAmount >= 0 {
+			result.AllocatedCash += asset.BuyAmount
+		} else {
+			result.EstimatedSellTotal += -asset.BuyAmount
+		}
 	}
 
 	result.AllocatedCash = roundMoney(result.AllocatedCash)
-	result.RemainingCash = roundMoney(math.Max(0, investAmount-result.AllocatedCash))
+	result.EstimatedSellTotal = roundMoney(result.EstimatedSellTotal)
+	result.RemainingCash = roundMoney(math.Max(0, investAmount+result.EstimatedSellTotal-result.AllocatedCash))
 	return result, nil
+}
+
+// allocateTargetChanges is used only when a pre-buy holding breaches the
+// configured severe-overweight line. It calculates signed changes that bring
+// every holding to its target in the final portfolio. Positive values are buys
+// and negative values are estimated sells; their net equals investAmount.
+func allocateTargetChanges(assets []*AssetResult, investAmount float64) {
+	if len(assets) == 0 {
+		return
+	}
+	targetNetCents := int64(math.Round(investAmount * 100))
+	assignedCents := int64(0)
+	for _, asset := range assets {
+		changeCents := int64(math.Round((asset.TargetAmount - asset.CurrentAmount) * 100))
+		asset.BuyAmount = float64(changeCents) / 100
+		assignedCents += changeCents
+	}
+	// Independent cent rounding can leave a small net discrepancy. Apply it to
+	// the largest target holding so cash remains exactly balanced.
+	delta := targetNetCents - assignedCents
+	if delta != 0 {
+		largest := 0
+		for i := 1; i < len(assets); i++ {
+			if assets[i].TargetAmount > assets[largest].TargetAmount {
+				largest = i
+			}
+		}
+		assets[largest].BuyAmount = roundMoney(assets[largest].BuyAmount + float64(delta)/100)
+	}
+}
+
+func validRelativeDeviationThresholdPct(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value > 0 && value <= 100
+}
+
+func normalizedRelativeDeviationThresholdPct(value float64) float64 {
+	if !validRelativeDeviationThresholdPct(value) {
+		return defaultRelativeDeviationThresholdPct
+	}
+	return value
 }
 
 func allocationStatus(asset *AssetResult) string {
@@ -278,7 +346,7 @@ func FormatResult(result *PortfolioResult) string {
 	if len(result.Assets) > 0 {
 		b.WriteString(resultTableHeader([]resultColumn{
 			{Text: "资产", Width: widths.name},
-			{Text: "买入金额", Width: widths.buyAmount},
+			{Text: "金额变动", Width: widths.buyAmount},
 			{Text: "当前仓位", Width: widths.currentPct},
 			{Text: "买入后仓位", Width: widths.afterPct},
 			{Text: "目标仓位", Width: widths.targetPct},
@@ -286,7 +354,7 @@ func FormatResult(result *PortfolioResult) string {
 		for _, asset := range result.Assets {
 			b.WriteString(resultTableRow([]resultColumn{
 				{Text: asset.Name, Width: widths.name},
-				{Text: formatMoney(asset.BuyAmount) + " 元", Width: widths.buyAmount},
+				{Text: formatSignedMoneyChange(asset.BuyAmount), Width: widths.buyAmount},
 				{Text: formatPercent(asset.CurrentPct), Width: widths.currentPct},
 				{Text: formatPercent(asset.AfterPct), Width: widths.afterPct},
 				{Text: formatPercent(asset.TargetPct), Width: widths.targetPct},
@@ -294,43 +362,38 @@ func FormatResult(result *PortfolioResult) string {
 		}
 	}
 
-	hasHigh, hasLow := false, false
-	var warningLines strings.Builder
+	hasEstimatedSell := false
 	for _, asset := range result.Assets {
-		switch {
-		case severelyHigh(asset):
-			hasHigh = true
-			warningLines.WriteString(fmt.Sprintf(
-				"• %s 买入后预计 %s，高于严重超配线 %s。\r\n",
+		if asset.BuyAmount < -moneyEpsilon {
+			if !hasEstimatedSell {
+				b.WriteString("\r\n严重偏离提醒\r\n")
+				hasEstimatedSell = true
+			}
+			b.WriteString(fmt.Sprintf(
+				"• %s 存在严重超配，预估需卖出 %s 元，请执行卖出操作后，使用记录卖出功能留档。\r\n",
 				asset.Name,
-				formatPercent(asset.AfterPct),
-				formatPercent(asset.HighLine),
-			))
-		case severelyLow(asset):
-			hasLow = true
-			warningLines.WriteString(fmt.Sprintf(
-				"• %s 买入后预计 %s，低于严重低配线 %s。\r\n",
-				asset.Name,
-				formatPercent(asset.AfterPct),
-				formatPercent(asset.LowLine),
+				formatMoney(-asset.BuyAmount),
 			))
 		}
 	}
-
-	if hasHigh || hasLow {
-		b.WriteString("\r\n严重偏离提醒\r\n")
-		b.WriteString(warningLines.String())
-		switch {
-		case hasHigh && hasLow:
-			b.WriteString("• 可考虑卖出部分严重超配资产，并将资金调入严重低配资产；程序仅作提醒，不自动计算卖出。\r\n")
-		case hasHigh:
-			b.WriteString("• 可考虑卖出部分严重超配资产；程序仅作提醒，不自动计算卖出。\r\n")
-		case hasLow:
-			b.WriteString("• 可考虑继续向严重低配资产投入资金；程序仅作提醒。\r\n")
-		}
+	if !hasEstimatedSell {
+		b.WriteString("\r\n")
 	}
+	b.WriteString("请执行完买入操作后，使用记录买入留档\r\n")
 
 	return b.String()
+}
+
+func formatSignedMoneyChange(value float64) string {
+	value = roundMoney(value)
+	switch {
+	case value > moneyEpsilon:
+		return "+" + formatMoney(value) + " 元"
+	case value < -moneyEpsilon:
+		return "-" + formatMoney(-value) + " 元"
+	default:
+		return "0 元"
+	}
 }
 
 type resultFormatWidths struct {
@@ -349,14 +412,14 @@ type resultColumn struct {
 func resultTableWidths(assets []*AssetResult) resultFormatWidths {
 	widths := resultFormatWidths{
 		name:       16,
-		buyAmount:  displayWidth("买入金额"),
+		buyAmount:  displayWidth("金额变动"),
 		targetPct:  displayWidth("目标仓位"),
 		currentPct: displayWidth("当前仓位"),
 		afterPct:   displayWidth("买入后仓位"),
 	}
 	for _, asset := range assets {
 		widths.name = maxDisplayWidth(widths.name, asset.Name)
-		widths.buyAmount = maxDisplayWidth(widths.buyAmount, formatMoney(asset.BuyAmount)+" 元")
+		widths.buyAmount = maxDisplayWidth(widths.buyAmount, formatSignedMoneyChange(asset.BuyAmount))
 		widths.targetPct = maxDisplayWidth(widths.targetPct, formatPercent(asset.TargetPct))
 		widths.currentPct = maxDisplayWidth(widths.currentPct, formatPercent(asset.CurrentPct))
 		widths.afterPct = maxDisplayWidth(widths.afterPct, formatPercent(asset.AfterPct))

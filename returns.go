@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	yieldDataHint       = "年化收益率优先按 XIRR 计算，无法求解时回退为 Modified Dietz 近似；现金流包含所选资产的买入和卖出。"
-	yieldInitialMessage = "选择资产和月份后点击测算收益"
-	yieldSellHint       = "为确保年化收益率正确，若期间存在卖出，请在平衡买入计算界面中填写卖出信息"
+	yieldDataHint       = "收益以更新收益记录作为估值点，以记录买入和记录卖出作为现金流；年化收益率优先按 XIRR 计算。"
+	yieldInitialMessage = "先保存更新收益记录，再选择资产和月份测算收益"
+	yieldSellHint       = "请及时使用更新收益、记录买入和记录卖出保存数据，以确保收益测算准确"
 )
 
 type yieldPoint struct {
@@ -196,7 +196,7 @@ func yieldRecordBeforeAmount(record InvestmentRecord, selection yieldSelection) 
 	if selection.Total {
 		total := 0.0
 		for _, asset := range record.Assets {
-			total += asset.BeforeAmount
+			total += asset.CurrentAmount
 		}
 		if len(record.Assets) > 0 {
 			return roundMoney(total), true
@@ -211,14 +211,14 @@ func yieldRecordBeforeAmount(record InvestmentRecord, selection yieldSelection) 
 		if _, ok := selection.Keys[key]; !ok {
 			continue
 		}
-		total += asset.BeforeAmount
+		total += asset.CurrentAmount
 		found = true
 	}
 	return roundMoney(total), found
 }
 
 func yieldRecordBuyAmount(record InvestmentRecord, selection yieldSelection) float64 {
-	if isSellRecord(record) {
+	if !isBuyRecord(record) {
 		return 0
 	}
 	total := 0.0

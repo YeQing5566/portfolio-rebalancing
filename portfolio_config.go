@@ -10,15 +10,32 @@ import (
 )
 
 const (
-	portfolioConfigFileName    = "portfolio_config.json"
-	portfolioConfigFileVersion = 2
-	appDataDirName             = "PortfolioRebalancing"
+	portfolioConfigFileName        = "portfolio_config.json"
+	portfolioConfigFileVersion     = 5
+	appDataDirName                 = "PortfolioRebalancing"
+	defaultInvestAmount            = 2000.0
+	defaultCalculatorTopCardHeight = 350
+	defaultWindowWidth             = 1360
+	defaultWindowHeight            = 860
 )
 
 type portfolioConfigFile struct {
-	Version      int           `json:"version"`
-	InvestAmount flexibleFloat `json:"invest_amount"`
-	Assets       []AssetInput  `json:"assets"`
+	Version                       int           `json:"version"`
+	InvestAmount                  flexibleFloat `json:"invest_amount"`
+	Assets                        []AssetInput  `json:"assets"`
+	RelativeDeviationThresholdPct flexibleFloat `json:"relative_deviation_threshold_pct,omitempty"`
+	CalculatorTopCardHeight       int           `json:"calculator_top_card_height,omitempty"`
+	WindowWidth                   int           `json:"window_width,omitempty"`
+	WindowHeight                  int           `json:"window_height,omitempty"`
+}
+
+type portfolioConfigState struct {
+	InvestAmount                  float64
+	Assets                        []AssetInput
+	RelativeDeviationThresholdPct float64
+	CalculatorTopCardHeight       int
+	WindowWidth                   int
+	WindowHeight                  int
 }
 
 type flexibleFloat float64
@@ -78,43 +95,90 @@ func portfolioConfigPath() (string, error) {
 	return appDataFilePath(portfolioConfigFileName)
 }
 
-func loadPortfolioConfig(defaultInvestAmount float64) (float64, []AssetInput, error) {
+func defaultPortfolioAssets() []AssetInput {
+	return []AssetInput{
+		{Name: "标普500", TargetPct: 25, CurrentAmount: 0},
+		{Name: "纳指100", TargetPct: 12.5, CurrentAmount: 0},
+		{Name: "中证A500", TargetPct: 25, CurrentAmount: 0},
+		{Name: "红利低波", TargetPct: 12.5, CurrentAmount: 0},
+		{Name: "0-3年政金债", TargetPct: 12.5, CurrentAmount: 0},
+		{Name: "7-10年政金债", TargetPct: 12.5, CurrentAmount: 0},
+	}
+}
+
+func defaultPortfolioConfigState() portfolioConfigState {
+	return portfolioConfigState{
+		InvestAmount:                  defaultInvestAmount,
+		Assets:                        defaultPortfolioAssets(),
+		RelativeDeviationThresholdPct: defaultRelativeDeviationThresholdPct,
+		CalculatorTopCardHeight:       defaultCalculatorTopCardHeight,
+		WindowWidth:                   defaultWindowWidth,
+		WindowHeight:                  defaultWindowHeight,
+	}
+}
+
+func loadPortfolioConfig() (portfolioConfigState, error) {
+	state := defaultPortfolioConfigState()
 	path, err := portfolioConfigPath()
 	if err != nil {
-		return defaultInvestAmount, nil, err
+		return state, err
 	}
 
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return defaultInvestAmount, nil, nil
+		return state, nil
 	}
 	if err != nil {
-		return defaultInvestAmount, nil, err
+		return state, err
 	}
 
 	var file portfolioConfigFile
 	if err := json.Unmarshal(data, &file); err != nil {
-		return defaultInvestAmount, nil, fmt.Errorf("当前资产配置文件格式错误：%w", err)
+		return state, fmt.Errorf("当前资产配置文件格式错误：%w", err)
 	}
-	investAmount := float64(file.InvestAmount)
-	if investAmount < 0 {
-		investAmount = defaultInvestAmount
+	if investAmount := float64(file.InvestAmount); investAmount >= 0 {
+		state.InvestAmount = investAmount
 	}
-	return investAmount, clonePortfolioAssets(file.Assets), nil
+	state.Assets = clonePortfolioAssets(file.Assets)
+	state.RelativeDeviationThresholdPct = normalizedRelativeDeviationThresholdPct(float64(file.RelativeDeviationThresholdPct))
+	if file.CalculatorTopCardHeight > 0 {
+		state.CalculatorTopCardHeight = file.CalculatorTopCardHeight
+	}
+	if file.WindowWidth > 0 {
+		state.WindowWidth = file.WindowWidth
+	}
+	if file.WindowHeight > 0 {
+		state.WindowHeight = file.WindowHeight
+	}
+	return state, nil
 }
 
-func savePortfolioConfig(investAmount float64, assets []AssetInput) error {
+func savePortfolioConfig(state portfolioConfigState) error {
 	path, err := portfolioConfigPath()
 	if err != nil {
 		return err
 	}
-	if investAmount < 0 {
-		investAmount = 0
+	if state.InvestAmount < 0 {
+		state.InvestAmount = 0
 	}
+	if state.CalculatorTopCardHeight <= 0 {
+		state.CalculatorTopCardHeight = defaultCalculatorTopCardHeight
+	}
+	if state.WindowWidth <= 0 {
+		state.WindowWidth = defaultWindowWidth
+	}
+	if state.WindowHeight <= 0 {
+		state.WindowHeight = defaultWindowHeight
+	}
+	state.RelativeDeviationThresholdPct = normalizedRelativeDeviationThresholdPct(state.RelativeDeviationThresholdPct)
 	file := portfolioConfigFile{
-		Version:      portfolioConfigFileVersion,
-		InvestAmount: flexibleFloat(investAmount),
-		Assets:       filledPortfolioAssets(assets),
+		Version:                       portfolioConfigFileVersion,
+		InvestAmount:                  flexibleFloat(state.InvestAmount),
+		Assets:                        filledPortfolioAssets(state.Assets),
+		RelativeDeviationThresholdPct: flexibleFloat(state.RelativeDeviationThresholdPct),
+		CalculatorTopCardHeight:       state.CalculatorTopCardHeight,
+		WindowWidth:                   state.WindowWidth,
+		WindowHeight:                  state.WindowHeight,
 	}
 	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
@@ -147,7 +211,7 @@ func clonePortfolioAssets(assets []AssetInput) []AssetInput {
 }
 
 func portfolioAssetsFromHistory(record InvestmentRecord) []AssetInput {
-	if isSellRecord(record) {
+	if !isValuationRecord(record) {
 		return nil
 	}
 	assets := make([]AssetInput, 0, len(record.Assets))
@@ -155,7 +219,7 @@ func portfolioAssetsFromHistory(record InvestmentRecord) []AssetInput {
 		item := AssetInput{
 			Name:          strings.TrimSpace(asset.Name),
 			TargetPct:     asset.TargetPct,
-			CurrentAmount: roundMoney(asset.AfterAmount),
+			CurrentAmount: roundMoney(asset.CurrentAmount),
 		}
 		if isBlankAsset(item) {
 			continue

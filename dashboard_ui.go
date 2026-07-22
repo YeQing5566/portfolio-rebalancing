@@ -25,6 +25,8 @@ const (
 	dashPageYield
 )
 
+const calculatorMinTopCardHeight = 304
+
 // rsrc assigns the manifest ID first, then the icon group ID.
 const appIconResourceID = 2
 
@@ -54,57 +56,60 @@ type dashboardUI struct {
 	fontBig   *walk.Font
 	fontHuge  *walk.Font
 
-	page               int
-	assets             []AssetInput
-	investAmount       float64
-	selectedAsset      int
-	assetScroll        int
-	resultScroll       int
-	archiveDraft       *InvestmentRecord
-	archiveSuggested   []float64
-	archiveScroll      int
-	sellDraft          *InvestmentRecord
-	sellScroll         int
-	resultText         string
-	statusText         string
-	hoverAction        string
-	historyScroll      int
-	historyAssetScroll int
-	trendOptionScroll  int
-	trendStartText     string
-	trendEndText       string
-	trendDisplayData   trendChartData
-	trendHoverSeries   int
-	trendHoverIndex    int
-	trendPlot          walk.Rectangle
-	yieldOptionScroll  int
-	yieldStartText     string
-	yieldEndText       string
-	yieldData          yieldChartData
-	yieldCalculated    bool
-	yieldHoverIndex    int
-	yieldPlot          walk.Rectangle
-	regionWidth        int
-	regionHeight       int
-	dragMode           string
-	dragStartX         int
-	dragStartY         int
-	dragStartBounds    walk.Rectangle
-	dragStartTable     int
-	dragStartScroll    int
-	dragScrollTotal    int
-	dragScrollVisible  int
-	dragScrollTrackH   int
-	dragScrollThumbH   int
-	assetTableHeight   int
-	cursorMode         string
-	lastTitleClickAt   time.Time
-	lastTitleClickX    int
-	lastTitleClickY    int
-	activeField        *dashField
-	actions            []dashAction
-	fields             []dashField
-	scrollbars         []dashScrollbar
+	page                          int
+	assets                        []AssetInput
+	investAmount                  float64
+	selectedAsset                 int
+	assetScroll                   int
+	resultScroll                  int
+	archiveDraft                  *InvestmentRecord
+	archiveSuggested              []float64
+	archiveScroll                 int
+	sellDraft                     *InvestmentRecord
+	sellScroll                    int
+	resultText                    string
+	statusText                    string
+	hoverAction                   string
+	historyScroll                 int
+	historyAssetScroll            int
+	trendOptionScroll             int
+	trendStartText                string
+	trendEndText                  string
+	trendDisplayData              trendChartData
+	trendHoverSeries              int
+	trendHoverIndex               int
+	trendPlot                     walk.Rectangle
+	yieldOptionScroll             int
+	yieldStartText                string
+	yieldEndText                  string
+	yieldData                     yieldChartData
+	yieldCalculated               bool
+	yieldHoverIndex               int
+	yieldPlot                     walk.Rectangle
+	regionWidth                   int
+	regionHeight                  int
+	dragMode                      string
+	dragStartX                    int
+	dragStartY                    int
+	dragStartBounds               walk.Rectangle
+	dragStartTable                int
+	dragStartScroll               int
+	dragScrollTotal               int
+	dragScrollVisible             int
+	dragScrollTrackH              int
+	dragScrollThumbH              int
+	assetTableHeight              int
+	relativeDeviationThresholdPct float64
+	windowWidth                   int
+	windowHeight                  int
+	cursorMode                    string
+	lastTitleClickAt              time.Time
+	lastTitleClickX               int
+	lastTitleClickY               int
+	activeField                   *dashField
+	actions                       []dashAction
+	fields                        []dashField
+	scrollbars                    []dashScrollbar
 }
 
 type dashAction struct {
@@ -220,13 +225,17 @@ func runDashboardApp() {
 	})
 
 	ui := &dashboardUI{
-		page:             dashPageCalc,
-		investAmount:     5000,
-		selectedAsset:    -1,
-		trendHoverSeries: -1,
-		trendHoverIndex:  -1,
-		yieldHoverIndex:  -1,
-		resultText:       initialResultText(),
+		page:                          dashPageCalc,
+		investAmount:                  defaultInvestAmount,
+		relativeDeviationThresholdPct: defaultRelativeDeviationThresholdPct,
+		assetTableHeight:              defaultCalculatorTopCardHeight,
+		windowWidth:                   defaultWindowWidth,
+		windowHeight:                  defaultWindowHeight,
+		selectedAsset:                 -1,
+		trendHoverSeries:              -1,
+		trendHoverIndex:               -1,
+		yieldHoverIndex:               -1,
+		resultText:                    initialResultText(),
 	}
 	ui.initFonts()
 	if err := ui.loadPortfolioConfig(); err != nil {
@@ -237,7 +246,7 @@ func runDashboardApp() {
 		AssignTo:   &ui.mw,
 		Title:      "投资组合再平衡助手",
 		MinSize:    Size{Width: dashStyle.minWidth, Height: dashStyle.minHeight},
-		Size:       Size{Width: 1360, Height: 860},
+		Size:       Size{Width: ui.windowWidth, Height: ui.windowHeight},
 		Font:       Font{Family: "Microsoft YaHei UI", PointSize: 11},
 		Background: SolidColorBrush{Color: dashColors.shell},
 		Layout: VBox{
@@ -270,6 +279,10 @@ func runDashboardApp() {
 	ui.attachEvents()
 	if err := loadInvestmentRecords(); err != nil {
 		ui.statusText = "历史记录读取失败：" + err.Error()
+		walk.MsgBox(ui.mw, "历史投资记录启动保护失败", "历史投资记录的启动校验、备份或自动恢复未能完成。\r\n\r\n程序已禁止覆盖正式记录文件。\r\n\r\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+	} else if investmentRecordsStartupWarning != "" {
+		ui.statusText = "历史记录正式文件已从最近一次有效备份恢复"
+		walk.MsgBox(ui.mw, "历史投资记录已从备份恢复", investmentRecordsStartupWarning, walk.MsgBoxOK|walk.MsgBoxIconWarning)
 	}
 	ui.ensureHistorySelection()
 	ui.ensureTrendRange()
@@ -629,12 +642,10 @@ func (ui *dashboardUI) paintCalculator(canvas *walk.Canvas, bounds walk.Rectangl
 	cardGap := dashStyle.gap
 	mainY := 84
 	mainH := maxInt(0, bounds.Height-mainY-dashStyle.pagePad)
-	minTopH := 236
+	minTopH := calculatorMinTopCardHeight
 	maxTopH := maxInt(minTopH, mainH-cardGap-240)
-	defaultResultH := bounds.Height / 2
-	defaultTopH := clampInt(mainH-cardGap-defaultResultH, minTopH, maxTopH)
 	if ui.assetTableHeight <= 0 {
-		ui.assetTableHeight = defaultTopH
+		ui.assetTableHeight = defaultCalculatorTopCardHeight
 	}
 	ui.assetTableHeight = clampInt(ui.assetTableHeight, minTopH, maxTopH)
 	topH := ui.assetTableHeight
@@ -646,31 +657,24 @@ func (ui *dashboardUI) paintCalculator(canvas *walk.Canvas, bounds walk.Rectangl
 
 	ui.drawPortfolioPanel(canvas, overview)
 	ui.drawPanel(canvas, table, "资产条目", "")
-	actionX := table.X + table.Width - 238
-	ui.drawButton(canvas, rect(actionX, table.Y+10, 104, dashStyle.buttonHeight), "添加资产", "calc-add", false)
-	ui.drawButton(canvas, rect(actionX+116, table.Y+10, 104, dashStyle.buttonHeight), "删除选中", "calc-delete", false)
+	actionX := table.X + table.Width - 354
+	ui.drawButton(canvas, rect(actionX, table.Y+10, 104, dashStyle.buttonHeight), "更新收益", "calc-valuation", false)
+	ui.drawButton(canvas, rect(actionX+116, table.Y+10, 104, dashStyle.buttonHeight), "添加资产", "calc-add", false)
+	ui.drawButton(canvas, rect(actionX+232, table.Y+10, 104, dashStyle.buttonHeight), "删除选中", "calc-delete", false)
 	ui.drawAssetTable(canvas, table)
 
 	resultY := mainY + topH + cardGap
 	ui.drawSplitHandle(canvas, rect(left, resultY-cardGap/2-3, contentW, 6), "split-table")
 
 	result := rect(left, resultY, contentW, resultH)
-	if ui.archiveDraft != nil {
-		ui.drawArchiveConfirmPanel(canvas, result)
-		return
-	}
-	if ui.sellDraft != nil {
-		ui.drawSellConfirmPanel(canvas, result)
-		return
-	}
 	ui.drawPanel(canvas, result, "再平衡建议", "")
 	buttonW := 104
 	saveX := result.X + result.Width - buttonW - 18
 	runX := saveX - buttonW - 12
 	sellX := runX - buttonW - 12
-	ui.drawDangerButton(canvas, rect(sellX, result.Y+10, buttonW, dashStyle.buttonHeight), "期间卖出", "calc-sell")
-	ui.drawButton(canvas, rect(runX, result.Y+10, buttonW, dashStyle.buttonHeight), "计算建议", "calc-run", true)
-	ui.drawButton(canvas, rect(saveX, result.Y+10, buttonW, dashStyle.buttonHeight), "保存归档", "calc-save", false)
+	ui.drawDangerButton(canvas, rect(sellX, result.Y+10, buttonW, dashStyle.buttonHeight), "记录卖出", "calc-sell")
+	ui.drawButton(canvas, rect(runX, result.Y+10, buttonW, dashStyle.buttonHeight), "记录买入", "calc-buy", false)
+	ui.drawButton(canvas, rect(saveX, result.Y+10, buttonW, dashStyle.buttonHeight), "计算建议", "calc-run", true)
 	ui.drawResultText(canvas, inset(result, 18, 62))
 }
 
@@ -745,7 +749,13 @@ func (ui *dashboardUI) drawPortfolioPanel(canvas *walk.Canvas, r walk.Rectangle)
 	ui.drawField(canvas, investField, "invest", -1, formatPlainMoney(ui.investAmount), "0", true, "")
 	drawText(canvas, "元", ui.fontSmall, dashColors.muted, rect(investField.X+investField.Width+8, investField.Y, 22, investField.Height), walk.TextLeft|walk.TextVCenter)
 
-	rowY := y + 74
+	thresholdY := y + 74
+	drawText(canvas, "触发再平衡的相对偏离阈值", ui.fontSmall, dashColors.muted, rect(x, thresholdY, r.Width-dashStyle.cardPad*2, 18), walk.TextLeft|walk.TextVCenter)
+	thresholdField := rect(x, thresholdY+24, r.Width-dashStyle.cardPad*2-30, 34)
+	ui.drawField(canvas, thresholdField, "relative-deviation-threshold", -1, formatMaybeFloat(ui.relativeDeviationThresholdPct), "20", true, "")
+	drawText(canvas, "%", ui.fontSmall, dashColors.muted, rect(thresholdField.X+thresholdField.Width+8, thresholdField.Y, 22, thresholdField.Height), walk.TextLeft|walk.TextVCenter)
+
+	rowY := y + 142
 	innerW := r.Width - dashStyle.cardPad*2
 	colGap := 12
 	colW := maxInt(0, (innerW-colGap)/2)
@@ -776,12 +786,13 @@ func targetStatusColor(total float64) walk.Color {
 	return dashColors.warning
 }
 
-func relativeTargetDeviationColor(deviationPct float64) walk.Color {
+func relativeTargetDeviationColor(deviationPct, thresholdPct float64) walk.Color {
 	absDeviation := math.Abs(deviationPct)
+	thresholdPct = normalizedRelativeDeviationThresholdPct(thresholdPct)
 	switch {
-	case absDeviation >= 20:
+	case absDeviation >= thresholdPct:
 		return dashColors.danger
-	case absDeviation >= 10:
+	case absDeviation >= thresholdPct/2:
 		return dashColors.warning
 	default:
 		return dashColors.white
@@ -812,10 +823,47 @@ func (ui *dashboardUI) drawResultText(canvas *walk.Canvas, r walk.Rectangle) {
 		} else if strings.Contains(line, "严重") {
 			color = dashColors.warning
 		}
+		if font == ui.fontMono && drawSignedResultLine(canvas, line, ui.fontMono, color, r.X, y, r.Width) {
+			y += lineH
+			continue
+		}
 		drawText(canvas, line, font, color, rect(r.X, y, r.Width, 20), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
 		y += lineH
 	}
 	ui.drawScrollBar(canvas, "scroll-result", rect(r.X+r.Width+8, r.Y, 6, maxInt(0, r.Height-4)), len(lines), visible, ui.resultScroll)
+}
+
+func drawSignedResultLine(canvas *walk.Canvas, line string, font *walk.Font, color walk.Color, x, y, width int) bool {
+	minus, end, ok := signedMoneySpan(line)
+	if !ok {
+		return false
+	}
+	prefix := line[:minus]
+	negative := line[minus:end]
+	suffix := line[end:]
+	prefixW := measureTextWidth(canvas, prefix, font)
+	negativeW := measureTextWidth(canvas, negative, font)
+	drawText(canvas, prefix, font, color, rect(x, y, width, 20), walk.TextLeft|walk.TextVCenter)
+	drawText(canvas, negative, font, dashColors.danger, rect(x+prefixW, y, maxInt(0, width-prefixW), 20), walk.TextLeft|walk.TextVCenter)
+	drawText(canvas, suffix, font, color, rect(x+prefixW+negativeW, y, maxInt(0, width-prefixW-negativeW), 20), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+	return true
+}
+
+func signedMoneySpan(line string) (int, int, bool) {
+	for offset := 0; offset < len(line); {
+		rel := strings.Index(line[offset:], "-")
+		if rel < 0 {
+			break
+		}
+		minus := offset + rel
+		if minus > 0 && line[minus-1] == ' ' && minus+1 < len(line) && line[minus+1] >= '0' && line[minus+1] <= '9' {
+			if endRel := strings.Index(line[minus:], " 元"); endRel >= 0 {
+				return minus, minus + endRel + len(" 元"), true
+			}
+		}
+		offset = minus + 1
+	}
+	return 0, 0, false
 }
 
 func (ui *dashboardUI) drawArchiveConfirmPanel(canvas *walk.Canvas, r walk.Rectangle) {
@@ -996,9 +1044,12 @@ func (ui *dashboardUI) drawHistoryList(canvas *walk.Canvas, panel walk.Rectangle
 		roundFill(canvas, bg, r, 8)
 		drawRoundStroke(canvas, dashColors.line, r, 8, 1)
 		drawText(canvas, record.ArchivedAt, ui.fontSmall, dashColors.text, rect(r.X+12, r.Y+8, r.Width-24, 18), walk.TextLeft|walk.TextVCenter)
-		amountLabel := "买入金额 " + formatMoney(record.InvestAmount) + " 元"
+		amountLabel := "买入金额 " + formatMoney(recordBuyTotal(record)) + " 元"
 		amountColor := dashColors.accent
-		if isSellRecord(record) {
+		if isValuationRecord(record) {
+			amountLabel = "更新收益"
+			amountColor = walk.RGB(34, 197, 94)
+		} else if isSellRecord(record) {
 			amountLabel = "卖出金额 " + formatMoney(recordSellTotal(record)) + " 元"
 			amountColor = dashColors.danger
 		}
@@ -1006,7 +1057,7 @@ func (ui *dashboardUI) drawHistoryList(canvas *walk.Canvas, panel walk.Rectangle
 		ui.actions = append(ui.actions, dashAction{Rect: r, Kind: dashActionSelect, Key: "history-row", Index: index})
 	}
 	if len(investmentRecords) == 0 {
-		drawText(canvas, "暂无历史记录。计算页保存后会出现在这里。", ui.fontBody, dashColors.muted, rect(x, y+36, w, 60), walk.TextCenter|walk.TextVCenter|walk.TextWordbreak)
+		drawText(canvas, "暂无历史记录。记录买入、记录卖出或更新收益后会出现在这里。", ui.fontBody, dashColors.muted, rect(x, y+36, w, 60), walk.TextCenter|walk.TextVCenter|walk.TextWordbreak)
 	}
 	ui.drawScrollBar(canvas, "scroll-history-list", rect(panel.X+panel.Width-12, y, 6, maxInt(0, panel.Y+panel.Height-y-bottomControlsH)), len(investmentRecords), visible, ui.historyScroll)
 	buttonY := panel.Y + panel.Height - dashStyle.buttonHeight - 16
@@ -1024,54 +1075,61 @@ func (ui *dashboardUI) drawHistoryDetail(canvas *walk.Canvas, panel walk.Rectang
 	x := panel.X + 18
 	y := panel.Y + 58
 	w := panel.Width - 36
-	if isSellRecord(selectedHistoryDraft) {
-		ui.drawSellHistoryDetail(canvas, panel, x, y, w)
+	if isValuationRecord(selectedHistoryDraft) {
+		ui.drawValuationHistoryDetail(canvas, panel, x, y, w)
 		return
 	}
+	ui.drawTransactionHistoryDetail(canvas, panel, x, y, w)
+}
+
+func (ui *dashboardUI) drawTransactionHistoryDetail(canvas *walk.Canvas, panel walk.Rectangle, x, y, w int) {
+	isSell := isSellRecord(selectedHistoryDraft)
+	label := "买入"
+	total := recordBuyTotal(selectedHistoryDraft)
+	amountColor := dashColors.accent
+	if isSell {
+		label = "卖出"
+		total = recordSellTotal(selectedHistoryDraft)
+		amountColor = dashColors.danger
+	}
 	ui.drawField(canvas, rect(x, y, 220, 38), "hist-archive", -1, selectedHistoryDraft.ArchivedAt, "记录时间", false, "")
-	historyInvestField := rect(x+236, y, 128, 38)
-	ui.drawReadOnlyField(canvas, historyInvestField, formatMoney(selectedHistoryDraft.InvestAmount), "真实投入")
-	drawText(canvas, "元", ui.fontSmall, dashColors.muted, rect(historyInvestField.X+historyInvestField.Width+8, historyInvestField.Y, 22, historyInvestField.Height), walk.TextLeft|walk.TextVCenter)
+	amountField := rect(x+236, y, 128, 38)
+	ui.drawReadOnlyField(canvas, amountField, formatMoney(total), label+"金额")
+	drawText(canvas, "元", ui.fontSmall, dashColors.muted, rect(amountField.X+amountField.Width+8, amountField.Y, 22, amountField.Height), walk.TextLeft|walk.TextVCenter)
 	ui.drawField(canvas, rect(x+408, y, w-408, 38), "hist-notes", -1, selectedHistoryDraft.Notes, "备注", false, "")
 
 	summaryY := y + 52
-	summary := fmt.Sprintf("买入前 %s 元  |  真实投入 %s 元  |  买入后 %s 元",
-		formatMoney(selectedHistoryDraft.CurrentTotal),
-		formatMoney(selectedHistoryDraft.InvestAmount),
-		formatMoney(selectedHistoryDraft.AfterTotal))
-	drawText(canvas, summary, ui.fontBold, dashColors.accent, rect(x, summaryY, w, 24), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+	summary := label + "总金额 " + formatMoney(total) + " 元"
+	drawText(canvas, summary, ui.fontBold, amountColor, rect(x, summaryY, w, 24), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
 
 	tableY := summaryY + 38
 	tableBottom := panel.Y + panel.Height - dashStyle.buttonHeight - 34
 	table := rect(x, tableY, w, maxInt(190, tableBottom-tableY))
-	ui.drawHistoryAssetTable(canvas, table)
+	ui.drawTransactionHistoryAssetTable(canvas, table, isSell)
+
+	ui.drawDangerButton(canvas, rect(panel.X+panel.Width-140, panel.Y+panel.Height-58, 118, dashStyle.buttonHeight), "删除记录", "hist-delete")
+}
+
+func (ui *dashboardUI) drawValuationHistoryDetail(canvas *walk.Canvas, panel walk.Rectangle, x, y, w int) {
+	ui.drawField(canvas, rect(x, y, 220, 38), "hist-archive", -1, selectedHistoryDraft.ArchivedAt, "记录时间", false, "")
+	ui.drawField(canvas, rect(x+236, y, w-236, 38), "hist-notes", -1, selectedHistoryDraft.Notes, "备注", false, "")
+
+	summaryY := y + 52
+	summary := "更新收益  |  当前资产总额 " + formatMoney(selectedHistoryDraft.CurrentTotal) + " 元"
+	drawText(canvas, summary, ui.fontBold, walk.RGB(34, 197, 94), rect(x, summaryY, w, 24), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+
+	tableY := summaryY + 38
+	tableBottom := panel.Y + panel.Height - dashStyle.buttonHeight - 34
+	table := rect(x, tableY, w, maxInt(190, tableBottom-tableY))
+	ui.drawValuationHistoryAssetTable(canvas, table)
 
 	ui.drawButton(canvas, rect(panel.X+panel.Width-270, panel.Y+panel.Height-58, 118, dashStyle.buttonHeight), "读取记录", "hist-load-to-calc", false)
 	ui.drawDangerButton(canvas, rect(panel.X+panel.Width-140, panel.Y+panel.Height-58, 118, dashStyle.buttonHeight), "删除记录", "hist-delete")
 }
 
-func (ui *dashboardUI) drawSellHistoryDetail(canvas *walk.Canvas, panel walk.Rectangle, x, y, w int) {
-	ui.drawField(canvas, rect(x, y, 220, 38), "hist-archive", -1, selectedHistoryDraft.ArchivedAt, "记录时间", false, "")
-	sellField := rect(x+236, y, 128, 38)
-	ui.drawReadOnlyField(canvas, sellField, formatMoney(recordSellTotal(selectedHistoryDraft)), "卖出金额")
-	drawText(canvas, "元", ui.fontSmall, dashColors.muted, rect(sellField.X+sellField.Width+8, sellField.Y, 22, sellField.Height), walk.TextLeft|walk.TextVCenter)
-	ui.drawField(canvas, rect(x+408, y, w-408, 38), "hist-notes", -1, selectedHistoryDraft.Notes, "备注", false, "")
-
-	summaryY := y + 52
-	summary := "卖出总金额 " + formatMoney(recordSellTotal(selectedHistoryDraft)) + " 元"
-	drawText(canvas, summary, ui.fontBold, dashColors.danger, rect(x, summaryY, w, 24), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
-
-	tableY := summaryY + 38
-	tableBottom := panel.Y + panel.Height - dashStyle.buttonHeight - 34
-	table := rect(x, tableY, w, maxInt(190, tableBottom-tableY))
-	ui.drawSellHistoryAssetTable(canvas, table)
-
-	ui.drawDangerButton(canvas, rect(panel.X+panel.Width-140, panel.Y+panel.Height-58, 118, dashStyle.buttonHeight), "删除记录", "hist-delete")
-}
-
-func (ui *dashboardUI) drawHistoryAssetTable(canvas *walk.Canvas, table walk.Rectangle) {
-	headers := []string{"资产", "目标", "买入前", "买入", "买入后", "买入后仓位", "相对目标偏离"}
-	widths := []int{maxInt(126, table.Width-76-118-106-120-100-122), 76, 118, 106, 120, 100, 122}
+func (ui *dashboardUI) drawValuationHistoryAssetTable(canvas *walk.Canvas, table walk.Rectangle) {
+	headers := []string{"资产", "目标仓位", "当前持有金额", "当前仓位", "相对目标偏离"}
+	widths := []int{maxInt(150, table.Width-110-170-120-150), 110, 170, 120, 150}
 	drawTableHeader(canvas, ui.fontTiny, table.X, table.Y, widths, headers)
 	rowY := table.Y + 28
 	visible := maxInt(1, (table.Y+table.Height-rowY)/34)
@@ -1092,33 +1150,37 @@ func (ui *dashboardUI) drawHistoryAssetTable(canvas *walk.Canvas, table walk.Rec
 		roundFill(canvas, bg, r, 7)
 		ui.actions = append(ui.actions, dashAction{Rect: r, Kind: dashActionSelect, Key: "hasset-row", Index: index})
 		cx := table.X
-		ui.drawField(canvas, rect(cx+4, r.Y+3, widths[0]-8, 24), "hasset-name", index, asset.Name, "资产名称", false, "")
+		drawText(canvas, asset.Name, ui.fontSmall, dashColors.text, rect(cx+8, r.Y, widths[0]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
 		cx += widths[0]
 		targetField := rect(cx+4, r.Y+3, widths[1]-28, 24)
 		ui.drawField(canvas, targetField, "hasset-target", index, formatMaybeFloat(asset.TargetPct), "0", true, "")
 		drawText(canvas, "%", ui.fontSmall, dashColors.muted, rect(targetField.X+targetField.Width+6, r.Y, 18, r.Height), walk.TextLeft|walk.TextVCenter)
 		cx += widths[1]
-		ui.drawField(canvas, rect(cx+4, r.Y+3, widths[2]-8, 24), "hasset-before", index, formatMaybeFloat(asset.BeforeAmount), "0", true, "")
+		ui.drawField(canvas, rect(cx+4, r.Y+3, widths[2]-8, 24), "hasset-current", index, formatMaybeFloat(asset.CurrentAmount), "0", true, "")
 		cx += widths[2]
-		ui.drawField(canvas, rect(cx+4, r.Y+3, widths[3]-8, 24), "hasset-buy", index, formatMaybeFloat(asset.BuyAmount), "0", true, "")
+		drawText(canvas, formatPercent(asset.CurrentPct), ui.fontSmall, dashColors.accent, rect(cx+8, r.Y, widths[3]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
 		cx += widths[3]
-		drawText(canvas, formatMoney(asset.AfterAmount), ui.fontSmall, dashColors.text, rect(cx+8, r.Y, widths[4]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
-		cx += widths[4]
-		drawText(canvas, formatPercent(asset.AfterPct), ui.fontSmall, dashColors.accent, rect(cx+8, r.Y, widths[5]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
-		cx += widths[5]
 		deviationText := "-"
 		deviationColor := dashColors.muted
 		if deviationPct, ok := relativeTargetDeviationPct(asset); ok {
 			deviationText = formatSignedPercent(deviationPct)
-			deviationColor = relativeTargetDeviationColor(deviationPct)
+			deviationColor = relativeTargetDeviationColor(deviationPct, ui.relativeDeviationThresholdPct)
 		}
-		drawText(canvas, deviationText, ui.fontSmall, deviationColor, rect(cx+8, r.Y, widths[6]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
+		drawText(canvas, deviationText, ui.fontSmall, deviationColor, rect(cx+8, r.Y, widths[4]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
 	}
 	ui.drawScrollBar(canvas, "scroll-history-detail", rect(table.X+table.Width+8, rowY, 6, maxInt(0, table.Y+table.Height-rowY)), len(selectedHistoryDraft.Assets), visible, ui.historyAssetScroll)
 }
 
-func (ui *dashboardUI) drawSellHistoryAssetTable(canvas *walk.Canvas, table walk.Rectangle) {
-	headers := []string{"资产名称", "卖出金额"}
+func (ui *dashboardUI) drawTransactionHistoryAssetTable(canvas *walk.Canvas, table walk.Rectangle, sell bool) {
+	amountLabel := "买入金额"
+	amountKey := "hasset-buy"
+	amountColor := dashColors.accent
+	if sell {
+		amountLabel = "卖出金额"
+		amountKey = "hasset-sell"
+		amountColor = dashColors.danger
+	}
+	headers := []string{"资产名称", amountLabel}
 	widths := []int{maxInt(220, table.Width-180), 180}
 	drawTableHeader(canvas, ui.fontTiny, table.X, table.Y, widths, headers)
 	rowY := table.Y + 28
@@ -1140,13 +1202,17 @@ func (ui *dashboardUI) drawSellHistoryAssetTable(canvas *walk.Canvas, table walk
 		roundFill(canvas, bg, r, 7)
 		ui.actions = append(ui.actions, dashAction{Rect: r, Kind: dashActionSelect, Key: "hasset-row", Index: index})
 		cx := table.X
-		ui.drawField(canvas, rect(cx+4, r.Y+3, widths[0]-8, 24), "hasset-name", index, asset.Name, "资产名称", false, "")
+		drawText(canvas, asset.Name, ui.fontSmall, dashColors.text, rect(cx+8, r.Y, widths[0]-16, r.Height), walk.TextLeft|walk.TextVCenter|walk.TextEndEllipsis)
 		cx += widths[0]
 		unitW := 22
 		unitGap := 6
-		sellField := rect(cx+4, r.Y+3, maxInt(0, widths[1]-8-unitGap-unitW), 24)
-		ui.drawField(canvas, sellField, "hasset-sell", index, formatMaybeFloat(asset.SellAmount), "0", true, "")
-		drawText(canvas, "元", ui.fontSmall, dashColors.muted, rect(sellField.X+sellField.Width+unitGap, r.Y, unitW, r.Height), walk.TextLeft|walk.TextVCenter)
+		amount := asset.BuyAmount
+		if sell {
+			amount = asset.SellAmount
+		}
+		amountField := rect(cx+4, r.Y+3, maxInt(0, widths[1]-8-unitGap-unitW), 24)
+		ui.drawField(canvas, amountField, amountKey, index, formatMaybeFloat(amount), "0", true, "")
+		drawText(canvas, "元", ui.fontSmall, amountColor, rect(amountField.X+amountField.Width+unitGap, r.Y, unitW, r.Height), walk.TextLeft|walk.TextVCenter)
 	}
 	ui.drawScrollBar(canvas, "scroll-history-detail", rect(table.X+table.Width+8, rowY, 6, maxInt(0, table.Y+table.Height-rowY)), len(selectedHistoryDraft.Assets), visible, ui.historyAssetScroll)
 }
@@ -1858,9 +1924,16 @@ func (ui *dashboardUI) handleMouseUp(_, _ int, button walk.MouseButton) {
 		return
 	}
 	if ui.dragMode != "" {
+		finishedDragMode := ui.dragMode
 		ui.dragMode = ""
 		win.ReleaseCapture()
 		ui.setCursorMode("")
+		if strings.HasPrefix(finishedDragMode, "resize-") {
+			ui.captureWindowSizeForConfig()
+		}
+		if finishedDragMode == "split-table" || strings.HasPrefix(finishedDragMode, "resize-") {
+			ui.autoSavePortfolioConfig()
+		}
 		ui.invalidate()
 	}
 }
@@ -2006,7 +2079,7 @@ func (ui *dashboardUI) updateDrag() {
 		bounds := ui.canvas.ClientBoundsPixels()
 		mainY := 84
 		mainH := maxInt(0, bounds.Height-mainY-dashStyle.pagePad)
-		minTableH := 236
+		minTableH := calculatorMinTopCardHeight
 		maxTableH := maxInt(minTableH, mainH-dashStyle.gap-240)
 		ui.assetTableHeight = clampInt(ui.dragStartTable+dy, minTableH, maxTableH)
 		ui.invalidate()
@@ -2033,7 +2106,38 @@ func (ui *dashboardUI) resizeWindow(dx, dy int) {
 		next.Y = b.Y + b.Height - next.Height
 	}
 	_ = ui.mw.SetBoundsPixels(next)
+	actual := ui.mw.BoundsPixels()
+	if b.Height > 0 && actual.Height != b.Height && ui.dragStartTable > 0 {
+		canvasHeight := ui.canvas.ClientBoundsPixels().Height
+		ui.assetTableHeight = scaledCalculatorTopCardHeight(ui.dragStartTable, b.Height, actual.Height, canvasHeight)
+	}
 	ui.invalidate()
+}
+
+func scaledCalculatorTopCardHeight(startCardHeight, startWindowHeight, nextWindowHeight, nextCanvasHeight int) int {
+	if startCardHeight <= 0 {
+		startCardHeight = defaultCalculatorTopCardHeight
+	}
+	if startWindowHeight <= 0 || nextWindowHeight <= 0 {
+		return startCardHeight
+	}
+	scaledHeight := int(math.Round(float64(startCardHeight) * float64(nextWindowHeight) / float64(startWindowHeight)))
+	mainHeight := maxInt(0, nextCanvasHeight-84-dashStyle.pagePad)
+	maxTableHeight := maxInt(calculatorMinTopCardHeight, mainHeight-dashStyle.gap-240)
+	return clampInt(scaledHeight, calculatorMinTopCardHeight, maxTableHeight)
+}
+
+func (ui *dashboardUI) captureWindowSizeForConfig() {
+	if ui.mw == nil {
+		return
+	}
+	size := walk.SizeTo96DPI(ui.mw.SizePixels(), ui.mw.DPI())
+	if size.Width > 0 {
+		ui.windowWidth = size.Width
+	}
+	if size.Height > 0 {
+		ui.windowHeight = size.Height
+	}
 }
 
 func resizeModeForPoint(bounds walk.Rectangle, x, y int) string {
@@ -2097,7 +2201,7 @@ func (ui *dashboardUI) handleMouseWheel(x, y int, button walk.MouseButton) {
 		bounds := ui.canvas.ClientBoundsPixels()
 		mainY := 84
 		mainH := maxInt(0, bounds.Height-mainY-dashStyle.pagePad)
-		minTopH := 236
+		minTopH := calculatorMinTopCardHeight
 		topH := minTopH
 		if ui.assetTableHeight > 0 {
 			maxTopH := maxInt(minTopH, mainH-dashStyle.gap-240)
@@ -2187,12 +2291,14 @@ func (ui *dashboardUI) handleAction(action dashAction) {
 		ui.selectedAsset = action.Index
 	case "calc-delete":
 		ui.deleteSelectedAsset()
+	case "calc-valuation":
+		ui.recordValuation()
 	case "calc-run":
 		ui.calculate()
 	case "calc-sell":
-		ui.openSellConfirmation()
-	case "calc-save":
-		ui.openArchiveConfirmation()
+		ui.recordTransaction(recordTypeSell)
+	case "calc-buy":
+		ui.recordTransaction(recordTypeBuy)
 	case "archive-confirm":
 		ui.confirmArchive()
 	case "archive-cancel":
@@ -2341,6 +2447,21 @@ func (ui *dashboardUI) applyField(field dashField, text string) {
 			ui.investAmount = value
 			ui.autoSavePortfolioConfig()
 		}
+	case "relative-deviation-threshold":
+		value, err := strconv.ParseFloat(strings.ReplaceAll(text, ",", ""), 64)
+		if err != nil {
+			ui.statusText = "请输入有效的相对偏离阈值"
+			return
+		}
+		if !validRelativeDeviationThresholdPct(value) {
+			ui.statusText = "触发再平衡的相对偏离阈值必须大于 0% 且不超过 100%"
+			return
+		}
+		ui.clearArchiveDraft()
+		ui.relativeDeviationThresholdPct = value
+		ui.resultText = initialResultText()
+		ui.resultScroll = 0
+		ui.autoSavePortfolioConfig()
 	case "asset-name":
 		if field.Index >= 0 && field.Index < len(ui.assets) {
 			ui.clearArchiveDraft()
@@ -2379,10 +2500,10 @@ func (ui *dashboardUI) applyField(field dashField, text string) {
 			recalculateInvestmentRecord(&selectedHistoryDraft)
 			ui.autoSaveHistoryDraft()
 		}
-	case "hasset-before":
+	case "hasset-current":
 		if value, ok := parse(); ok && field.Index >= 0 && field.Index < len(selectedHistoryDraft.Assets) {
 			selectedAssetIndex = field.Index
-			selectedHistoryDraft.Assets[field.Index].BeforeAmount = value
+			selectedHistoryDraft.Assets[field.Index].CurrentAmount = value
 			recalculateInvestmentRecord(&selectedHistoryDraft)
 			ui.autoSaveHistoryDraft()
 		}
@@ -2418,7 +2539,7 @@ func (ui *dashboardUI) applyField(field dashField, text string) {
 			value = parsed
 		}
 		ui.archiveDraft.Assets[field.Index].BuyAmount = roundMoney(value)
-		recalculateInvestmentRecord(ui.archiveDraft)
+		recalculateInvestmentRecordWithDeviationThreshold(ui.archiveDraft, ui.relativeDeviationThresholdPct)
 		ui.statusText = "已更新真实买入金额"
 	case "sell-name":
 		if ui.sellDraft == nil || field.Index < 0 || field.Index >= len(ui.sellDraft.Assets) {
@@ -2484,7 +2605,7 @@ func (ui *dashboardUI) deleteSelectedAsset() {
 
 func (ui *dashboardUI) calculate() {
 	ui.clearArchiveDraft()
-	result, err := CalculatePortfolio(ui.investAmount, ui.assets)
+	result, err := CalculatePortfolioWithDeviationThreshold(ui.investAmount, ui.assets, ui.relativeDeviationThresholdPct)
 	if err != nil {
 		ui.statusText = "输入有误：" + err.Error()
 		walk.MsgBox(ui.mw, "输入有误", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconWarning)
@@ -2494,8 +2615,66 @@ func (ui *dashboardUI) calculate() {
 	ui.statusText = "计算完成：所有目标金额均基于买入后的组合总额"
 }
 
+func (ui *dashboardUI) recordTransaction(recordType string) {
+	record := buyRecordFromAssets(ui.assets, time.Now())
+	label := "买入"
+	if recordType == recordTypeSell {
+		record = sellRecordFromAssets(ui.assets, time.Now())
+		label = "卖出"
+	}
+	if len(record.Assets) == 0 {
+		message := "请先填写资产名称后再记录" + label
+		ui.statusText = message
+		walk.MsgBox(ui.mw, "无法记录"+label, message, walk.MsgBoxOK|walk.MsgBoxIconWarning)
+		return
+	}
+
+	completed, saved, err := showTransactionRecordDialog(ui, record)
+	if err != nil {
+		ui.statusText = "打开" + label + "窗口失败：" + err.Error()
+		walk.MsgBox(ui.mw, "无法记录"+label, err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		return
+	}
+	if !saved {
+		ui.statusText = "已取消记录" + label
+		return
+	}
+	if err := appendInvestmentRecord(completed); err != nil {
+		ui.statusText = "保存失败：" + err.Error()
+		walk.MsgBox(ui.mw, "保存失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		return
+	}
+	ui.afterRecordSaved(completed)
+	ui.statusText = label + "记录已保存"
+	walk.MsgBox(ui.mw, "保存成功", label+"记录已保存，可在历史投资记录中查看", walk.MsgBoxOK|walk.MsgBoxIconInformation)
+}
+
+func (ui *dashboardUI) recordValuation() {
+	record, err := valuationRecordFromAssets(ui.assets, time.Now())
+	if err != nil {
+		ui.statusText = "更新收益失败：" + err.Error()
+		walk.MsgBox(ui.mw, "无法更新收益", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconWarning)
+		return
+	}
+	if err := appendInvestmentRecord(record); err != nil {
+		ui.statusText = "更新收益失败：" + err.Error()
+		walk.MsgBox(ui.mw, "更新收益失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		return
+	}
+	ui.afterRecordSaved(record)
+	ui.statusText = "收益数据已更新"
+	walk.MsgBox(ui.mw, "保存成功", "当前资产金额已保存为更新收益记录", walk.MsgBoxOK|walk.MsgBoxIconInformation)
+}
+
+func (ui *dashboardUI) afterRecordSaved(record InvestmentRecord) {
+	ui.selectHistoryByID(record.ID)
+	ui.ensureTrendRange()
+	ui.ensureYieldRange()
+	ui.markYieldDirty()
+}
+
 func (ui *dashboardUI) openArchiveConfirmation() {
-	result, err := CalculatePortfolio(ui.investAmount, ui.assets)
+	result, err := CalculatePortfolioWithDeviationThreshold(ui.investAmount, ui.assets, ui.relativeDeviationThresholdPct)
 	if err != nil {
 		ui.statusText = "保存失败：" + err.Error()
 		walk.MsgBox(ui.mw, "保存失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
@@ -2535,7 +2714,7 @@ func (ui *dashboardUI) confirmArchive() {
 		return
 	}
 	record := cloneInvestmentRecord(*ui.archiveDraft)
-	recalculateInvestmentRecord(&record)
+	recalculateInvestmentRecordWithDeviationThreshold(&record, ui.relativeDeviationThresholdPct)
 	if err := appendInvestmentRecord(record); err != nil {
 		ui.statusText = "保存失败：" + err.Error()
 		walk.MsgBox(ui.mw, "保存失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
@@ -2604,20 +2783,29 @@ func (ui *dashboardUI) clearArchiveDraft() {
 }
 
 func (ui *dashboardUI) loadPortfolioConfig() error {
-	investAmount, assets, err := loadPortfolioConfig(ui.investAmount)
-	if err != nil {
-		return err
-	}
-	ui.investAmount = investAmount
-	ui.assets = assets
+	state, err := loadPortfolioConfig()
+	ui.investAmount = state.InvestAmount
+	ui.assets = state.Assets
+	ui.relativeDeviationThresholdPct = state.RelativeDeviationThresholdPct
+	ui.assetTableHeight = state.CalculatorTopCardHeight
+	ui.windowWidth = state.WindowWidth
+	ui.windowHeight = state.WindowHeight
 	if len(ui.assets) > 0 {
 		ui.selectedAsset = 0
 	}
-	return nil
+	return err
 }
 
 func (ui *dashboardUI) autoSavePortfolioConfig() bool {
-	if err := savePortfolioConfig(ui.investAmount, ui.assets); err != nil {
+	state := portfolioConfigState{
+		InvestAmount:                  ui.investAmount,
+		Assets:                        ui.assets,
+		RelativeDeviationThresholdPct: ui.relativeDeviationThresholdPct,
+		CalculatorTopCardHeight:       ui.assetTableHeight,
+		WindowWidth:                   ui.windowWidth,
+		WindowHeight:                  ui.windowHeight,
+	}
+	if err := savePortfolioConfig(state); err != nil {
 		ui.statusText = "当前资产配置保存失败：" + err.Error()
 		return false
 	}
@@ -2633,8 +2821,8 @@ func (ui *dashboardUI) loadHistoryToCalculator() {
 	if record.ID == "" {
 		record = cloneInvestmentRecord(investmentRecords[selectedHistoryIndex])
 	}
-	if isSellRecord(record) {
-		ui.statusText = "卖出记录不能读取到平衡买入计算"
+	if !isValuationRecord(record) {
+		ui.statusText = "只有更新收益记录可以读取到平衡买入计算"
 		return
 	}
 	recalculateInvestmentRecord(&record)
@@ -2649,7 +2837,7 @@ func (ui *dashboardUI) loadHistoryToCalculator() {
 	ui.resultText = initialResultText()
 	ui.page = dashPageCalc
 	if ui.autoSavePortfolioConfig() {
-		ui.statusText = "已读取历史记录，当前资产金额使用买入后金额"
+		ui.statusText = "已读取更新收益记录中的资产金额"
 	}
 }
 
@@ -2832,6 +3020,7 @@ func (ui *dashboardUI) importHistory() {
 		walk.MsgBox(ui.mw, "导入失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
+	investmentRecordsWriteEnabled = true
 	investmentRecords = records
 	selectedHistoryIndex = -1
 	selectedAssetIndex = -1
