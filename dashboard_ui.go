@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
@@ -275,6 +276,7 @@ func runDashboardApp() {
 	})
 	dashboard = ui
 	ui.installBorderlessWindow()
+	ui.centerMainWindow()
 	ui.installEditor()
 	ui.attachEvents()
 	if err := loadInvestmentRecords(); err != nil {
@@ -337,6 +339,34 @@ func (ui *dashboardUI) installBorderlessWindow() {
 	style &^= win.WS_CAPTION | win.WS_THICKFRAME
 	win.SetWindowLong(hwnd, win.GWL_STYLE, int32(style))
 	win.SetWindowPos(hwnd, 0, 0, 0, 0, 0, win.SWP_NOMOVE|win.SWP_NOSIZE|win.SWP_NOZORDER|win.SWP_FRAMECHANGED)
+}
+
+func (ui *dashboardUI) centerMainWindow() {
+	if ui.mw == nil {
+		return
+	}
+
+	var monitorInfo win.MONITORINFO
+	monitorInfo.CbSize = uint32(unsafe.Sizeof(monitorInfo))
+	monitor := win.MonitorFromWindow(ui.mw.Handle(), win.MONITOR_DEFAULTTOPRIMARY)
+	if monitor == 0 || !win.GetMonitorInfo(monitor, &monitorInfo) {
+		return
+	}
+
+	bounds := ui.mw.BoundsPixels()
+	workArea := walk.Rectangle{
+		X:      int(monitorInfo.RcWork.Left),
+		Y:      int(monitorInfo.RcWork.Top),
+		Width:  int(monitorInfo.RcWork.Right - monitorInfo.RcWork.Left),
+		Height: int(monitorInfo.RcWork.Bottom - monitorInfo.RcWork.Top),
+	}
+	_ = ui.mw.SetBoundsPixels(centeredWindowBounds(workArea, bounds))
+}
+
+func centeredWindowBounds(workArea, windowBounds walk.Rectangle) walk.Rectangle {
+	windowBounds.X = workArea.X + (workArea.Width-windowBounds.Width)/2
+	windowBounds.Y = workArea.Y + (workArea.Height-windowBounds.Height)/2
+	return windowBounds
 }
 
 func (ui *dashboardUI) applyRoundedRegion(width, height int) {

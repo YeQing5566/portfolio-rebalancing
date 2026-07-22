@@ -512,6 +512,17 @@ func TestTransactionDialogUsesCompactWidthAndMatchesAssetCardRows(t *testing.T) 
 	}
 }
 
+func TestCenteredWindowBoundsUsesWorkAreaAndPreservesSize(t *testing.T) {
+	workArea := walk.Rectangle{X: 1920, Y: 40, Width: 1600, Height: 900}
+	window := walk.Rectangle{X: 0, Y: 0, Width: 1200, Height: 720}
+
+	got := centeredWindowBounds(workArea, window)
+	want := walk.Rectangle{X: 2120, Y: 130, Width: 1200, Height: 720}
+	if got != want {
+		t.Fatalf("centered bounds = %+v, want %+v", got, want)
+	}
+}
+
 func assertClose(t *testing.T, got, want, tolerance float64) {
 	t.Helper()
 	if math.Abs(got-want) > tolerance {
